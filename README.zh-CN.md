@@ -22,7 +22,7 @@
 
 ## 2. 快速安装与登录（Quick Installation）
 
-本项目目前通过 Obsidian 社区广受欢迎的 **BRAT (Beta Reviewers Auto-update Tester)** 插件进行分发与自动更新。
+本项目目前通过 Obsidian 社区广受欢迎的 **[BRAT](https://github.com/TfTHacker/obsidian42-brat)（Beta Reviewers Auto-update Tester）** 插件进行分发与自动更新。 BRAT 官方安装与使用说明：[How to install and use BRAT](https://tfthacker.com/BRAT)。
 
 ### 第一步：安装并配置 BRAT
 1. 打开 Obsidian **设置（Settings）➔ 第三方插件（Community plugins）**；
@@ -85,9 +85,19 @@ Raft Page 允许你将一个 Raft 频道直接与 Obsidian 中的**单篇笔记*
 
 ### 界面截图展示（Screenshots）
 
-| 桌面端：浅色主题与侧边栏协作 | 桌面端：深色主题与侧边栏协作 |
+截图界面为英文。管家把频道里的结论写进绑定的笔记，消息下方有 **Undo**，标题栏显示管家和状态小圆点：
+
+| 浅色主题 | 深色主题 |
 | :---: | :---: |
-| ![Desktop Light](assets/desktop-chat-light.png) | ![Desktop Dark](assets/desktop-chat-dark.png) |
+| ![管家更新（浅色）](assets/steward-update-light.png) | ![管家更新（深色）](assets/steward-update-dark.png) |
+
+绑定笔记或文件夹、选择管家：
+
+| 绑定菜单 | 选择管家 |
+| :---: | :---: |
+| ![绑定菜单](assets/bind-menu.png) | ![选择管家](assets/choose-steward.png) |
+
+截图中的人物和对话均为虚构，照片为 CC0（[来源](assets/CREDITS.md)）。
 
 ---
 

@@ -24,7 +24,7 @@ Working with AI assistants usually runs into two problems:
 
 ## 2. Install and sign in
 
-Raft Page is distributed through the Obsidian community plugin **BRAT** (Beta Reviewers Auto-update Tester), which also keeps it up to date.
+Raft Page is distributed through the Obsidian community plugin **[BRAT](https://github.com/TfTHacker/obsidian42-brat)** (Beta Reviewers Auto-update Tester), which also keeps it up to date. BRAT's own guide: [How to install and use BRAT](https://tfthacker.com/BRAT).
 
 ### Install with BRAT
 
@@ -46,6 +46,8 @@ Raft Page is distributed through the Obsidian community plugin **BRAT** (Beta Re
    - Your Raft email and password.
 3. Choose **Sign in**. Your channels and their members appear in the sidebar.
 
+<img src="assets/signin.png" alt="Sign-in form in the Raft sidebar" width="720">
+
 ---
 
 ## 3. Bind a channel and choose a steward
@@ -60,6 +62,8 @@ Raft Page can bind a Raft channel to a **single note** or a **whole folder**.
    - **A folder**, such as `projects/travel-guide/`, for a project with many notes.
 3. Pick the Raft channel.
 
+<img src="assets/bind-menu.png" alt="The bind menu offering the note, its folder or a parent folder" width="720">
+
 A note uses its own binding, otherwise the nearest bound folder above it. Opening a bound note switches the sidebar to its channel; unbound notes leave the current channel alone. Bindings are stored in the plugin folder as `bindings.json` (no login data) and follow renames and moves. Binding posts one notice in the channel.
 
 ### Choose a steward
@@ -68,6 +72,8 @@ A note uses its own binding, otherwise the nearest bound folder above it. Openin
 - **Why one steward?**
   - Several agents editing the same note at once would conflict.
   - One agent is clearly responsible for recording the channel's decisions.
+<img src="assets/choose-steward.png" alt="Choosing the steward agent after binding" width="720">
+
 - A cheap, fast model is enough for this role. The steward needs no setup: its instructions travel in the sync thread (see [STEWARD.md](STEWARD.md) for the long form).
 
 ---
@@ -98,9 +104,13 @@ A note uses its own binding, otherwise the nearest bound folder above it. Openin
 
 ### Screenshots
 
-| Desktop, light theme | Desktop, dark theme |
+The steward records the channel's decision in the bound note; the message shows **Undo**, and the header shows the steward with its status dot.
+
+| Light theme | Dark theme |
 | :---: | :---: |
-| ![Desktop, light theme](assets/desktop-chat-light.png) | ![Desktop, dark theme](assets/desktop-chat-dark.png) |
+| ![Steward update, light theme](assets/steward-update-light.png) | ![Steward update, dark theme](assets/steward-update-dark.png) |
+
+The conversation in the screenshots is fictional; the photo is CC0 ([credits](assets/CREDITS.md)).
 
 ---
 
