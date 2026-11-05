@@ -12,10 +12,16 @@ interface Settings {
   attachDocument: boolean; useSelection: boolean; autoApply: boolean;
   /** Agent name chosen as steward for new bindings when it is in the channel. */
   defaultSteward: string;
+  /**
+   * Keyboard height in px to reserve when the composer is focused. iOS Obsidian neither resizes the window nor the
+   * visual viewport when the software keyboard opens, so nothing can be measured; 0 keeps the measured behaviour.
+   */
+  mobileKeyboardHeight: number;
 }
 const DEFAULTS: Settings = {
   apiUrl: 'https://api.raft.build', serverId: '', serverSlug: '',
   channelId: '', agent: '', attachDocument: true, useSelection: false, autoApply: true, defaultSteward: '',
+  mobileKeyboardHeight: 0,
 };
 type UndoEntry = { id: string; path: string; before: string | null; after: string; senderName: string; at: number };
 type Snapshot = Omit<DocumentSnapshot, 'content'> & { userId: string; apiUrl: string; serverId: string; threadChannels: string[] };
@@ -823,6 +829,13 @@ class RaftSettingsTab extends PluginSettingTab {
       .setDesc('Agent name (without @) that new bindings use to keep notes up to date from the conversation, when it is in the channel. Leave empty to choose each time.')
       .addText(t => t.setPlaceholder('scribe').setValue(this.plugin.settings.defaultSteward).onChange(value => {
         this.plugin.settings.defaultSteward = value.trim().replace(/^@/, ''); void this.plugin.saveSettings();
+      }));
+    new Setting(el).setName('Mobile keyboard height')
+      .setDesc('Pixels to lift the message box on phones. iOS Obsidian neither resizes the window nor the visual viewport when the software keyboard opens, so the height cannot be detected. Enter roughly how far the box needs to move so it clears the keyboard (about 330 on a modern iPhone), and adjust until it sits just above it. 0 keeps the detected behaviour.')
+      .addText(t => t.setPlaceholder('0').setValue(String(this.plugin.settings.mobileKeyboardHeight || '')).onChange(value => {
+        const parsed = Number.parseInt(value, 10);
+        this.plugin.settings.mobileKeyboardHeight = Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+        void this.plugin.saveSettings();
       }));
     new Setting(el).setName('Open Raft conversations').addButton(b => b.setButtonText('Open sidebar').onClick(() => void this.plugin.openView()));
   }

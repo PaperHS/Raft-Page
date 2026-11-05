@@ -99,12 +99,16 @@ export class RaftView extends ItemView {
       const visibleBottom = viewport
         ? Math.min(layoutBottom, viewport.offsetTop + viewport.height)
         : layoutBottom;
-      const covered = Math.max(0, Math.round(this.contentEl.getBoundingClientRect().bottom - visibleBottom));
+      let covered = Math.max(0, Math.round(this.contentEl.getBoundingClientRect().bottom - visibleBottom));
+      // iOS Obsidian moves neither viewport when the keyboard opens, so nothing above can see it. Fall back to the
+      // configured height, applied only while the composer holds focus.
+      const manual = this.plugin.settings.mobileKeyboardHeight ?? 0;
+      if (manual > 0) covered = this.containerEl.ownerDocument.activeElement === this.composer ? manual : 0;
       if (this.keyboardDebug) {
         this.renderKeyboardDebug({
           covered, layoutBottom, visibleHeight: viewport?.height, offsetTop: viewport?.offsetTop,
-          contentBottom: Math.round(this.contentEl.getBoundingClientRect().bottom),
-        });
+          contentBottom: Math.round(this.contentEl.getBoundingClientRect().bottom), manual,
+        }, this.containerEl.ownerDocument.body.className);
       }
       const value = `${covered}px`;
       if (this.contentEl.style.getPropertyValue('--raft-keyboard') === value) return;
@@ -138,13 +142,16 @@ export class RaftView extends ItemView {
     if (on) this.renderKeyboardDebug({});
   }
 
-  private renderKeyboardDebug(metrics: Record<string, number | undefined>): void {
+  private renderKeyboardDebug(metrics: Record<string, number | undefined>, bodyClass?: string): void {
     if (!this.keyboardDebug) return;
     if (!this.keyboardDebugEl) {
       this.keyboardDebugEl = this.contentEl.createDiv({ cls: 'raft-keyboard-debug' });
-      this.keyboardDebugEl.setAttribute('style', 'position:fixed;left:8px;top:8px;z-index:9999;padding:4px 6px;border-radius:6px;background:#000c;color:#fff;font:11px/14px monospace;white-space:pre;pointer-events:none');
+      this.keyboardDebugEl.setAttribute('style', 'position:fixed;left:8px;top:8px;z-index:9999;padding:4px 6px;border-radius:6px;background:#000c;color:#fff;font:11px/14px monospace;white-space:pre-wrap;max-width:92vw;pointer-events:none');
     }
-    this.keyboardDebugEl.setText(Object.entries(metrics).map(([k, v]) => `${k}: ${v ?? '-'}`).join('\n'));
+    const lines = Object.entries(metrics).map(([k, v]) => `${k}: ${v ?? '-'}`);
+    // The body class tells us whether the host marks the keyboard itself, which would beat the manual setting.
+    if (bodyClass !== undefined) lines.push(`body: ${bodyClass || '(none)'}`);
+    this.keyboardDebugEl.setText(lines.join('\n'));
   }
 
   async onClose(): Promise<void> {
