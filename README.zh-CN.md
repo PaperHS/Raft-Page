@@ -97,6 +97,10 @@ Raft Page 允许你将一个 Raft 频道直接与 Obsidian 中的**单篇笔记*
 | :---: | :---: |
 | ![绑定菜单](assets/bind-menu.png) | ![选择管家](assets/choose-steward.png) |
 
+手机端（Obsidian 移动端界面，iPhone 尺寸）：
+
+<img src="assets/mobile-chat.png" alt="Obsidian 移动端界面中的 Raft Page" width="300">
+
 截图中的人物和对话均为虚构，照片为 CC0（[来源](assets/CREDITS.md)）。
 
 ---

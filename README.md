@@ -110,6 +110,10 @@ The steward records the channel's decision in the bound note; the message shows 
 | :---: | :---: |
 | ![Steward update, light theme](assets/steward-update-light.png) | ![Steward update, dark theme](assets/steward-update-dark.png) |
 
+On a phone (Obsidian's mobile layout at iPhone size):
+
+<img src="assets/mobile-chat.png" alt="Raft Page in Obsidian's mobile layout" width="300">
+
 The conversation in the screenshots is fictional; the photo is CC0 ([credits](assets/CREDITS.md)).
 
 ---

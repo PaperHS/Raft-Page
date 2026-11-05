@@ -161,6 +161,34 @@ try {
   await shoot('steward-update-light');
   await page.evaluate(() => document.body.classList.replace('theme-light', 'theme-dark'));
   await shoot('steward-update-dark');
+
+  // 4. Phone: Obsidian's own mobile emulation at iPhone size, with touch media queries.
+  await page.evaluate(() => document.body.classList.replace('theme-dark', 'theme-light'));
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 3, mobile: true });
+  await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
+  await cdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'hover', value: 'none' }, { name: 'pointer', value: 'coarse' }] }).catch(e => console.log('MEDIA', e.message));
+  await page.evaluate(() => globalThis.app.emulateMobile(true));
+  await page.waitForTimeout(6000);
+  page = app.contexts().flatMap(c => c.pages()).find(p => p.url().includes('obsidian.md')) ?? page;
+  // The reload clears the in-memory Undo history, so put the note back and let the steward's edit apply again.
+  await page.evaluate(async ({ note, text, id }) => {
+    const app = globalThis.app, plugin = app.plugins.plugins['raft-page'];
+    const file = app.vault.getAbstractFileByPath(note);
+    await app.vault.modify(file, text);
+    plugin.applied = plugin.applied.filter(entry => !entry.startsWith(id + ':'));
+    await app.workspace.getLeaf().openFile(file);
+    await plugin.openView();
+    await plugin.syncTick(); await plugin.applying;
+    await app.workspace.getLeavesOfType('raft-page')[0].view.refresh();
+  }, { note: NOTE, text: noteText, id: stewardEdit.id });
+  await page.locator('.raft-applied-row').waitFor({ timeout: 15000 });
+  await page.locator('.raft-message').first().waitFor({ timeout: 20000 });
+  await page.waitForTimeout(1500);
+  await page.locator('.raft-history').evaluate(el => { el.scrollTop = el.scrollHeight; });
+  console.log('MOBILE', await page.evaluate(() => ({ mobile: document.body.classList.contains('is-mobile'), hoverNone: matchMedia('(hover: none)').matches, w: innerWidth })));
+  await shoot('mobile-chat');
+  await page.evaluate(() => globalThis.app.emulateMobile(false));
 } finally {
   await app?.close().catch(() => {});
   child.kill();
