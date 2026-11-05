@@ -1,70 +1,56 @@
-"""Wraps a phone-sized screenshot in a generic, hand-drawn phone frame for the README.
+"""Puts a phone frame around a screenshot of the plugin, styled after a real
+iPhone screenshot (black body, thin highlight edge, status bar, home indicator).
+
+The status bar is not drawn: it is lifted from a real iPhone capture given by
+--status-bar-from, so no interface element in the result is invented.
 
 Usage:
-  python3 -I scripts/phone-frame.py <src> <dst> [--crop-left PX]
-
---crop-left trims a left-hand pane (e.g. Obsidian's sidebar) before framing.
-
-The camera pill and the home indicator are drawn in the bezel, never over the
-screenshot, so no part of the captured UI is obscured.
+  python3 -I scripts/phone-frame.py <src> <dst> --status-bar-from <ref.png> [--crop-left PX]
 """
 import sys
 from PIL import Image, ImageDraw
 
-args = [a for a in sys.argv[1:] if not a.startswith("--")]
-crop_left = 0
-if "--crop-left" in sys.argv:
-    crop_left = int(sys.argv[sys.argv.index("--crop-left") + 1])
+def arg(name, default=None):
+    return sys.argv[sys.argv.index(name) + 1] if name in sys.argv else default
 
-src, dst = args[0], args[1]
+src, dst = sys.argv[1], sys.argv[2]
+ref_path = arg("--status-bar-from")
+crop_left = int(arg("--crop-left", 0))
+
 shot = Image.open(src).convert("RGBA")
 if crop_left:
     shot = shot.crop((crop_left, 0, shot.width, shot.height))
-w, h = shot.size
-scale = w / 390  # the screenshot is 390 CSS px wide (before any crop)
+W, H = shot.size
+k = W / 454.0  # 454 = screen width of the reference capture
 
-side = round(4 * scale)
-screen_r, body_r = round(46 * scale), round(58 * scale)
-# Bezel must be tall enough at the top/bottom to hold the pill / home indicator.
-pill_h = round(30 * scale)
-bar_h = round(5 * scale)
-bezel_top = pill_h + round(16 * scale)
-bezel_bottom = bar_h + round(16 * scale)
-bezel_x = round(14 * scale)
+# --- real status bar, scaled to this screen width ---
+if ref_path:
+    ref = Image.open(ref_path).convert("RGBA")
+    bar = ref.crop((20, 83, 474, 158))                 # status-bar strip of the reference
+    bar = bar.resize((W, round(bar.height * W / bar.width)), Image.LANCZOS)
+    shot.alpha_composite(bar, (0, 0))
 
-W = w + 2 * bezel_x + 2 * side
-H = h + bezel_top + bezel_bottom
-canvas = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+# --- frame geometry, matching the reference ---
+edge = max(2, round(4 * k))      # thin highlight on the outside
+body = max(6, round(15 * k))     # black body between highlight and screen
+screen_r = round(52 * k)
+body_r = screen_r + body
+CW = W + 2 * (edge + body)
+CH = H + 2 * (edge + body)
+canvas = Image.new("RGBA", (CW, CH), (0, 0, 0, 0))
 draw = ImageDraw.Draw(canvas)
 
-# Side buttons, drawn first so the body overlaps them.
-button = (58, 58, 62, 255)
-for top, length in ((150, 30), (200, 56), (266, 56)):
-    draw.rounded_rectangle(
-        (0, bezel_top + round(top * scale), side * 2, bezel_top + round((top + length) * scale)),
-        radius=side, fill=button)
-draw.rounded_rectangle(
-    (W - side * 2, bezel_top + round(220 * scale), W, bezel_top + round(310 * scale)),
-    radius=side, fill=button)
+draw.rounded_rectangle((0, 0, CW - 1, CH - 1), radius=body_r + edge, fill=(122, 121, 121, 255))
+draw.rounded_rectangle((edge, edge, CW - edge - 1, CH - edge - 1), radius=body_r, fill=(13, 13, 13, 255))
 
-draw.rounded_rectangle((side, 0, W - side, H), radius=body_r, fill=(28, 28, 30, 255))
-draw.rounded_rectangle((side + 3, 3, W - side - 3, H - 3), radius=body_r - 3,
-                       outline=(72, 72, 76, 255), width=max(2, round(scale)))
+mask = Image.new("L", (W, H), 0)
+ImageDraw.Draw(mask).rounded_rectangle((0, 0, W - 1, H - 1), radius=screen_r, fill=255)
+canvas.paste(shot, (edge + body, edge + body), mask)
 
-mask = Image.new("L", (w, h), 0)
-ImageDraw.Draw(mask).rounded_rectangle((0, 0, w, h), radius=screen_r, fill=255)
-canvas.paste(shot, (side + bezel_x, bezel_top), mask)
-
-# Camera pill in the top bezel, home indicator in the bottom bezel.
-cx = W // 2
-pill_w = round(110 * scale)
-pill_top = (bezel_top - pill_h) // 2
-draw.rounded_rectangle((cx - pill_w // 2, pill_top, cx + pill_w // 2, pill_top + pill_h),
-                       radius=pill_h // 2, fill=(0, 0, 0, 255))
-bar_w = round(134 * scale)
-bar_top = bezel_top + h + (bezel_bottom - bar_h) // 2
-draw.rounded_rectangle((cx - bar_w // 2, bar_top, cx + bar_w // 2, bar_top + bar_h),
-                       radius=bar_h // 2, fill=(200, 200, 205, 255))
+# --- home indicator, in the blank strip at the bottom of the screen ---
+bar_w, bar_h = round(134 * k), round(5 * k)
+bx, by = (CW - bar_w) // 2, edge + body + H - round(22 * k)
+draw.rounded_rectangle((bx, by, bx + bar_w, by + bar_h), radius=bar_h // 2, fill=(20, 20, 20, 255))
 
 canvas.save(dst, optimize=True)
-print(dst, canvas.size)
+print(dst, canvas.size, 'ratio', round(canvas.width / canvas.height, 3))
