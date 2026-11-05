@@ -1,0 +1,10 @@
+import { mkdir, copyFile, readFile, writeFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+const manifest = JSON.parse(await readFile('manifest.json', 'utf8'));
+await mkdir('dist/raft-page', { recursive: true });
+for (const name of ['main.js', 'manifest.json', 'styles.css', 'README.md', 'STEWARD.md', 'LICENSE', 'NOTICE']) await copyFile(name, `dist/raft-page/${name}`);
+execFileSync('zip', ['-q', '-r', `raft-page-${manifest.version}.zip`, 'raft-page'], { cwd: 'dist' });
+const { createHash } = await import('node:crypto');
+const file = `raft-page-${manifest.version}.zip`;
+await writeFile('dist/SHA256SUMS', `${createHash('sha256').update(await readFile(`dist/${file}`)).digest('hex')}  ${file}\n`);
+console.log(`Installable bundle: dist/${file}`);

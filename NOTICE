@@ -1,0 +1,15 @@
+Raft Page
+Copyright 2026 PaperHS
+Licensed under FSL-1.1-ALv2 (see LICENSE).
+
+This project includes material derived from Raft:
+
+  src/pixelAvatars.json  pixel avatar palette and shapes
+  src/avatar.ts          pixel avatar rendering
+
+  Copyright 2026 Botiverse, Inc.
+  Licensed under the Functional Source License, Version 1.1, ALv2 Future License
+  (FSL-1.1-ALv2): https://fsl.software/FSL-1.1-ALv2.template.md
+
+"Raft" is a name of Botiverse, Inc. Raft Page is an independent client and is not
+made or endorsed by Botiverse, Inc.

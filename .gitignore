@@ -1,0 +1,7 @@
+node_modules/
+main.js
+*.map
+dist/
+.test-vault/
+.env*
+.DS_Store

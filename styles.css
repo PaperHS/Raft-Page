@@ -1,0 +1,249 @@
+/* Raft Page — mirrors Raft web's channel chat (tokens from @botiverse/raft-ui). */
+.raft-view {
+  --raft-canvas: #FFFFFF; --raft-popover: #FFFFFF; --raft-card: #FFFFFF;
+  --raft-fg: #141111; --raft-fg-muted: rgba(20, 17, 17, .678); --raft-fg-hint: rgba(20, 17, 17, .62); --raft-fg-disabled: rgba(20, 17, 17, .302);
+  --raft-link: #1447E6; --raft-line-strong: #141111; --raft-line-seam: rgba(20, 17, 17, .451); --raft-line-hairline: rgba(20, 17, 17, .149);
+  --raft-fill-muted: #F3F3F3; --raft-fill-pressed: rgba(20, 17, 17, .078);
+  --raft-brand: #FFD440; --raft-brand-soft: #FFF0BD; --raft-attention: #FF99C3; --raft-attention-soft: #FFD6E2; --raft-info-soft: #D7F2FE;
+  --raft-inactive: #C0B9B1; --raft-layer-code: #FFFFFF; --raft-code-fg: #24292e;
+  --raft-sticker-ink: #141111; --raft-sticker-edge: transparent; --raft-lavender: #BBAFE6;
+  --raft-shadow-float: 0 1px 0 rgba(20, 17, 17, .039), 0 12px 32px -12px rgba(20, 17, 17, .322);
+  --raft-focus-ring: 0 0 0 2px #FFFFFF, 0 0 0 4px #141111;
+  --raft-font: "Space Grotesk", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", system-ui, sans-serif;
+  --raft-mono: "Space Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  color: var(--raft-fg); background: var(--raft-canvas); font-family: var(--raft-font); font-size: 16px; line-height: 24px;
+  -webkit-font-smoothing: antialiased; box-sizing: border-box; height: 100%; width: 100%; min-width: 0; min-height: 0;
+}
+.theme-dark .raft-view {
+  --raft-canvas: #1B1B19; --raft-popover: #292927; --raft-card: #242422;
+  --raft-fg: #E5E5E2; --raft-fg-muted: #C4C4C1; --raft-fg-hint: #9E9E9B; --raft-fg-disabled: #636360;
+  --raft-link: #8EC5FF; --raft-line-strong: #E5E5E2; --raft-line-seam: rgba(250, 250, 247, .259); --raft-line-hairline: rgba(250, 250, 247, .102);
+  --raft-fill-muted: #32322F; --raft-fill-pressed: rgba(250, 250, 247, .078);
+  --raft-brand-soft: rgba(135, 111, 31, .161); --raft-attention-soft: rgba(208, 69, 124, .161); --raft-info-soft: rgba(0, 95, 122, .18);
+  --raft-layer-code: #0A0C10; --raft-code-fg: #f0f3f6; --raft-sticker-edge: rgba(250, 250, 247, .349);
+  --raft-shadow-float: 0 0 0 1px rgba(250, 250, 247, .078), 0 16px 40px -12px rgba(0, 0, 0, .8);
+  --raft-focus-ring: 0 0 0 2px #1B1B19, 0 0 0 4px #E5E5E2;
+}
+.workspace-leaf-content[data-type="raft-page"] > .view-content { padding: 0; background: var(--raft-canvas, inherit); }
+.raft-view *, .raft-view *::before, .raft-view *::after { box-sizing: border-box; }
+.raft-view [hidden] { display: none !important; }
+.raft-view ::selection { background: var(--raft-brand-soft); }
+.raft-view button { font-family: inherit; cursor: pointer; }
+.raft-view button:disabled { cursor: default; }
+.raft-view :is(button, input, select, textarea, summary):focus-visible { outline: none; box-shadow: var(--raft-focus-ring); }
+.raft-visually-hidden, .raft-status { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+.raft-error { color: var(--text-error); font-size: 13px; line-height: 18px; overflow-wrap: anywhere; }
+.raft-error:empty { display: none; }
+.raft-conversation { display: flex; flex-direction: column; overflow: hidden; padding-bottom: var(--raft-keyboard, 0px); }
+.raft-login { padding-bottom: calc(24px + var(--raft-keyboard, 0px)) !important; }
+
+/* Header */
+.raft-header { flex: 0 0 56px; height: 56px; display: flex; align-items: center; gap: 12px; padding: 0 12px 0 20px; border-bottom: 1px solid var(--raft-line-seam); background: var(--raft-canvas); min-width: 0; }
+.raft-channel-tile { flex: 0 0 27px; width: 27px; height: 27px; display: inline-flex; align-items: center; justify-content: center; border-radius: 4px; border: 1.5px solid var(--raft-sticker-ink); background: var(--raft-brand); color: var(--raft-sticker-ink); box-shadow: 0 0 0 1.5px var(--raft-sticker-edge); }
+.raft-channel-tile svg { width: 14px; height: 14px; stroke-width: 2; }
+.raft-header-title { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; justify-content: center; align-items: flex-start; }
+.raft-binding-source { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--raft-fg-muted, var(--text-muted)); font-family: var(--raft-font); font-size: 11.5px; line-height: 15px; }
+.raft-view .raft-bind-button.is-bound { color: var(--raft-brand); }
+.raft-binding-bar { display: flex; align-items: center; gap: 8px; padding: 6px 20px; border-bottom: 1px solid var(--raft-line-seam); background: var(--raft-canvas); color: var(--raft-fg-muted, var(--text-muted)); font-size: 12.5px; }
+.raft-binding-bar[hidden] { display: none; }
+.raft-binding-bar button { height: 22px; padding: 0 8px; font-size: 12px; }
+.raft-view .raft-channel-select { appearance: none; -webkit-appearance: none; field-sizing: content; width: auto; max-width: 100%; min-width: 0; height: 24px; padding: 0 22px 0 0; border: 0; border-radius: 0; box-shadow: none; background: transparent url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%239E9E9B' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m6 9 6 6 6-6'/></svg>") no-repeat right 2px center; color: var(--raft-fg); font-family: var(--raft-font); font-size: 15px; line-height: 20px; font-weight: 700; text-overflow: ellipsis; cursor: pointer; }
+.raft-view .raft-channel-select:hover { background-color: transparent; }
+.raft-thread-heading { font-size: 15px; line-height: 20px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.raft-thread-channel { margin-left: 8px; font-size: 12px; line-height: 16px; font-weight: 500; color: var(--raft-fg-hint); }
+.raft-header-actions { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
+.raft-view .raft-icon-button { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 8px; box-shadow: none; background: transparent; color: var(--raft-fg-muted); }
+.raft-view .raft-icon-button svg { width: 18px; height: 18px; }
+.raft-view .raft-icon-button:hover:not(:disabled) { background: var(--raft-fill-pressed); color: var(--raft-fg); }
+.raft-view .raft-icon-button:disabled { color: var(--raft-fg-disabled); }
+.raft-view .raft-icon-button.is-active { color: var(--raft-fg); background: var(--raft-fill-muted); }
+.raft-conversation-error { margin: 8px 20px 0; padding: 8px 10px; border-radius: 8px; background: var(--raft-attention-soft); color: var(--raft-fg); }
+
+/* Thread bar */
+.raft-thread-bar { display: flex; align-items: flex-start; gap: 8px; padding: 8px 20px 8px 12px; border-bottom: 1px solid var(--raft-line-hairline); }
+.raft-thread-context { display: flex; flex-direction: column; min-width: 0; padding-top: 6px; }
+.raft-thread-title { font-size: 13px; line-height: 18px; font-weight: 700; }
+.raft-thread-excerpt { font-size: 13px; line-height: 18px; color: var(--raft-fg-hint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Timeline */
+.raft-history { flex: 1 1 auto; min-height: 60px; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; padding: 8px 0 12px; }
+.raft-history::-webkit-scrollbar { width: 10px; }
+.raft-history::-webkit-scrollbar-track { background: transparent; }
+.raft-history::-webkit-scrollbar-thumb { min-height: 32px; border: 2px solid transparent; border-radius: 5px; background-clip: padding-box; background-color: color-mix(in srgb, var(--raft-fg) 24%, transparent); }
+.raft-history:hover::-webkit-scrollbar-thumb { background-color: color-mix(in srgb, var(--raft-fg) 36%, transparent); }
+.raft-history::-webkit-scrollbar-thumb:hover { background-color: color-mix(in srgb, var(--raft-fg) 52%, transparent); }
+.raft-view .raft-load-older { display: block; margin: 4px auto 8px; height: 28px; padding: 0 8px; border: 0; border-radius: 8px; box-shadow: none; background: transparent; color: var(--raft-fg-hint); font-family: var(--raft-mono); font-size: 12px; }
+.raft-view .raft-load-older:hover { background: var(--raft-fill-pressed); }
+.raft-history-state { padding: 24px 20px; text-align: center; color: var(--raft-fg-hint); font-size: 13px; line-height: 18px; }
+.raft-history-state:empty { display: none; }
+.raft-message-list { min-width: 0; }
+.raft-day-divider, .raft-system-message { display: flex; align-items: center; gap: 8px; padding: 12px 16px; font-family: var(--raft-mono); font-size: 12px; line-height: 16px; color: var(--raft-fg-hint); }
+.raft-rule { flex: 1 1 0; min-width: 12px; height: 1px; background: var(--raft-line-hairline); }
+.raft-system-message time { flex-shrink: 0; font-variant-numeric: tabular-nums; }
+.raft-system-text { min-width: 0; max-width: 75%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Message row */
+.raft-message { position: relative; display: flex; gap: 10px; padding: 8px 20px; min-width: 0; }
+.raft-message.is-continuation { padding-top: 0; }
+.raft-message:hover, .raft-message:focus-within { background: var(--raft-fill-pressed); }
+.raft-gutter { position: relative; flex: 0 0 28px; width: 28px; }
+.raft-avatar { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; margin-top: 2px; overflow: hidden; border-radius: 4px; border: 1.5px solid #141111; box-shadow: 0 0 0 1.5px var(--raft-sticker-edge); background: var(--raft-lavender); color: #141111; flex-shrink: 0; }
+.raft-avatar.is-agent { background: var(--raft-inactive); }
+.raft-avatar img { width: 100%; height: 100%; object-fit: cover; border-radius: 2px; display: block; }
+.raft-avatar img.is-pixel { image-rendering: pixelated; border-radius: 0; }
+.raft-avatar-icon { display: inline-flex; }
+.raft-avatar-icon svg { width: 16px; height: 16px; stroke-width: 2; }
+.raft-avatar-sm { width: 19px; height: 19px; margin-top: 0; border-width: 1px; }
+.raft-avatar-sm .raft-avatar-icon svg { width: 11px; height: 11px; }
+.raft-gutter-time { display: none; position: absolute; top: 4px; right: 0; font-family: var(--raft-mono); font-size: 12px; line-height: 16px; color: transparent; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.raft-message.is-continuation .raft-avatar, .raft-message.is-continuation .raft-message-meta { display: none; }
+.raft-message.is-continuation .raft-gutter-time { display: block; }
+.raft-message.is-continuation:hover .raft-gutter-time { color: var(--raft-fg-hint); }
+.raft-message-main { flex: 1 1 auto; min-width: 0; }
+.raft-message-meta { display: flex; align-items: center; gap: 6px; margin-bottom: 1px; min-width: 0; }
+.raft-message-sender { flex-shrink: 0; max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; line-height: 20px; font-weight: 700; color: var(--raft-fg); }
+.raft-message-subtitle { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; line-height: 16px; font-weight: 500; color: var(--raft-fg-hint); }
+.raft-message-time { margin-left: auto; flex-shrink: 0; padding-left: 6px; font-family: var(--raft-mono); font-size: 12px; line-height: 16px; color: var(--raft-fg-hint); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.raft-message:hover .raft-message-time { opacity: 0; }
+
+/* Body (Raft MarkdownContent) */
+.raft-view .raft-message-body { font-size: 16px; line-height: 24px; color: var(--raft-fg); overflow-wrap: break-word; user-select: text; }
+.raft-view .raft-message-body :is(p, ul, ol) { margin: 0 0 4px; }
+.raft-view .raft-message-body > :last-child { margin-bottom: 0; }
+.raft-view .raft-message-body :is(ul, ol) { padding-left: 20px; }
+.raft-view .raft-message-body li { margin-bottom: 2px; }
+.raft-view .raft-message-body :is(h1, h2, h3, h4, h5, h6) { font-weight: 700; line-height: 1.25; color: var(--raft-fg); }
+.raft-view .raft-message-body h1 { font-size: 1.286em; margin: 12px 0 4px; }
+.raft-view .raft-message-body h2 { font-size: 1.143em; margin: 8px 0 4px; }
+.raft-view .raft-message-body h3 { font-size: 1.071em; margin: 8px 0 4px; }
+.raft-view .raft-message-body :is(h4, h5, h6) { font-size: 1em; margin: 4px 0 2px; }
+.raft-view .raft-message-body blockquote { margin: 4px 0; padding-left: 10px; border-left: 2px solid var(--raft-line-seam); color: var(--raft-fg-muted); }
+.raft-view .raft-message-body :not(pre) > code { font-family: var(--raft-mono); font-size: .875em; line-height: 1.3em; padding: 1px 4px; border-radius: 4px; background: var(--raft-fill-muted); color: var(--raft-fg); }
+.raft-view .raft-message-body pre { margin: 4px 0; padding: 8px 12px; border-radius: 10px; border: 1px solid var(--raft-line-hairline); background: var(--raft-layer-code); color: var(--raft-code-fg); max-width: 100%; overflow-x: auto; }
+.raft-view .raft-message-body pre code { font-family: var(--raft-mono); font-size: 13px; line-height: 20px; background: none; padding: 0; }
+.raft-view .raft-message-body a { color: var(--raft-link); text-decoration: underline; text-underline-offset: 2px; text-decoration-thickness: 2px; }
+.raft-view .raft-message-body a:hover { text-decoration-color: var(--raft-attention); }
+.raft-view .raft-message-body table { border-collapse: collapse; max-width: 100%; display: block; overflow-x: auto; }
+.raft-view .raft-message-body :is(th, td) { border: 1px solid var(--raft-line-hairline); padding: 4px 8px; }
+.raft-view .raft-message-body th { background: var(--raft-fill-muted); font-weight: 700; }
+.raft-view .raft-message-body :is(img, video, iframe) { max-width: 100%; height: auto; }
+.raft-view .raft-message-body .copy-code-button { display: none; }
+.raft-mention { font-weight: 700; color: var(--raft-fg); text-decoration: underline; text-decoration-thickness: 1.5px; text-underline-offset: 3px; text-decoration-color: var(--raft-fg-hint); }
+.raft-mention:hover { text-decoration-color: var(--raft-fg); }
+.raft-mention.is-self { text-decoration: none; background: #FFD440; color: #141111; font-weight: 600; padding: 0 3px; border-radius: 4px; line-height: 1.2em; box-shadow: inset 0 0 0 1.5px #141111, 0 0 0 1.5px var(--raft-sticker-edge); }
+
+/* Chips, note context, proposals */
+.raft-sent-note, .raft-attachment, .raft-context-chip { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; height: 22px; padding: 0 6px; border-radius: 6px; border: 1px solid var(--raft-line-hairline); background: var(--raft-fill-muted); color: var(--raft-fg-muted); font-size: 12px; line-height: 16px; font-weight: 500; }
+.raft-sent-note > span:last-child, .raft-attachment > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.raft-sent-note { margin-top: 6px; }
+.raft-attachments { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.raft-chip-icon { display: inline-flex; flex-shrink: 0; }
+.raft-chip-icon svg { width: 12px; height: 12px; }
+.raft-sent-context { margin-top: 4px; font-family: var(--raft-mono); font-size: 12px; line-height: 16px; color: var(--raft-fg-hint); }
+.raft-sent-context summary { cursor: pointer; width: fit-content; }
+.raft-sent-context pre { max-height: 260px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; margin: 4px 0 0; padding: 8px 12px; border-radius: 10px; border: 1px solid var(--raft-line-hairline); background: var(--raft-layer-code); color: var(--raft-fg-muted); user-select: text; }
+.raft-proposal { margin-top: 8px; max-width: 480px; padding: 10px 12px; border-radius: 10px; border: 1.5px solid var(--raft-line-strong); background: var(--raft-card); }
+.raft-proposal-title { font-size: 13px; line-height: 18px; font-weight: 700; }
+.raft-proposal-path { margin: 2px 0 4px; font-family: var(--raft-mono); font-size: 12px; line-height: 16px; color: var(--raft-fg-muted); overflow-wrap: anywhere; }
+.raft-proposal .raft-caption { font-size: 12px; line-height: 16px; color: var(--raft-fg-hint); }
+.raft-proposal-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.raft-view .raft-proposal-actions button { height: 32px; padding: 0 12px; border-radius: 8px; border: 1.5px solid var(--raft-line-strong); box-shadow: none; background: var(--raft-card); color: var(--raft-fg); font-size: 13px; font-weight: 700; }
+.raft-view .raft-proposal-actions button.mod-cta { background: var(--raft-attention); color: #141111; border-color: #141111; }
+.raft-view .raft-proposal-actions button:hover:not(:disabled) { filter: brightness(.95); }
+.raft-view .raft-proposal-actions button:disabled { border-color: var(--raft-line-hairline); background: var(--raft-fill-muted); color: var(--raft-fg-disabled); }
+
+/* Thread summary — Raft's inline replies block with a clear "open" affordance */
+.raft-view .raft-thread-summary { display: flex; flex-direction: column; align-items: stretch; gap: 4px; margin-top: 8px; width: 100%; max-width: 480px; height: auto; padding: 8px 10px; border: 1px solid transparent; border-radius: 10px; box-shadow: none; background: var(--raft-fill-muted); color: var(--raft-fg); text-align: left; cursor: pointer; transition: border-color .12s, background-color .12s; }
+.raft-view .raft-thread-summary:hover { border-color: var(--raft-line-seam); background: linear-gradient(var(--raft-fill-pressed), var(--raft-fill-pressed)), var(--raft-fill-muted); }
+.raft-view .raft-thread-summary:active { transform: translateY(1px); }
+.raft-thread-summary-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.raft-thread-faces { display: flex; flex-shrink: 0; }
+.raft-thread-faces .raft-avatar-sm + .raft-avatar-sm { margin-left: -5px; }
+.raft-thread-count { flex-shrink: 0; font-size: 13px; line-height: 18px; font-weight: 700; color: var(--raft-link); }
+.raft-thread-last { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; line-height: 16px; color: var(--raft-fg-hint); }
+.raft-thread-open { margin-left: auto; flex-shrink: 0; font-size: 12px; line-height: 16px; font-weight: 600; color: var(--raft-fg-hint); opacity: 0; transition: opacity .12s; }
+.raft-thread-summary:hover .raft-thread-open, .raft-thread-summary:focus-visible .raft-thread-open { opacity: 1; }
+.raft-thread-chevron { display: inline-flex; flex-shrink: 0; color: var(--raft-fg-hint); transition: transform .12s, color .12s; }
+.raft-thread-summary-head > .raft-thread-chevron:first-child, .raft-thread-count + .raft-thread-chevron { margin-left: auto; }
+.raft-thread-chevron svg { width: 16px; height: 16px; }
+.raft-thread-summary:hover .raft-thread-chevron { transform: translateX(2px); color: var(--raft-fg); }
+.raft-thread-preview { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 13px; line-height: 18px; }
+.raft-thread-preview-name { flex-shrink: 0; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; color: var(--raft-fg-muted); }
+.raft-thread-preview-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--raft-fg-hint); }
+.raft-thread-preview-time { flex-shrink: 0; font-family: var(--raft-mono); font-size: 12px; line-height: 16px; color: var(--raft-fg-hint); }
+
+/* Image attachments */
+.raft-image-gallery { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; margin-top: 6px; max-width: 360px; }
+.raft-image-gallery.is-multiple { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.raft-view .raft-image-frame { display: block; width: 100%; height: auto; min-height: 60px; max-height: 320px; padding: 0; overflow: hidden; border: 1px solid var(--raft-line-hairline); border-radius: 10px; box-shadow: none; background: var(--raft-fill-muted); cursor: zoom-in; }
+.raft-image-gallery.is-multiple .raft-image-frame { aspect-ratio: 1; }
+.raft-image-frame img { display: block; width: 100%; height: 100%; max-height: 320px; object-fit: cover; }
+.raft-image-gallery:not(.is-multiple) .raft-image-frame img { object-fit: contain; height: auto; }
+.raft-image-frame.is-loading { min-height: 120px; }
+.raft-view .raft-image-frame.is-broken { min-height: 0; padding: 4px 8px; cursor: default; font-size: 12px; color: var(--raft-fg-hint); }
+.raft-image-modal { width: auto; max-width: 92vw; }
+.raft-image-modal img { display: block; max-width: 100%; max-height: 80vh; margin: 0 auto; border-radius: 10px; }
+
+/* Hover toolbar */
+.raft-hover-toolbar { position: absolute; top: -18px; right: 12px; z-index: 20; display: flex; gap: 2px; padding: 3px; border-radius: 8px; background: var(--raft-popover); box-shadow: 0 0 0 1px var(--raft-line-seam), var(--raft-shadow-float); opacity: 0; pointer-events: none; }
+.raft-message:hover .raft-hover-toolbar, .raft-message:focus-within .raft-hover-toolbar { opacity: 1; pointer-events: auto; }
+.raft-message-list > :first-child .raft-hover-toolbar, .raft-message-list > .raft-day-divider:first-child + .raft-message .raft-hover-toolbar { top: 2px; }
+
+/* Composer */
+.raft-composer-host { position: relative; flex: 0 0 auto; padding: 8px 20px 16px; background: var(--raft-canvas); }
+.raft-composer-box { display: flex; flex-direction: column; gap: 8px; padding: 12px 12px 8px; border: 1.5px solid var(--raft-line-strong); border-radius: 10px; background: var(--raft-card); }
+.raft-composer-box:focus-within { box-shadow: var(--raft-focus-ring); }
+.raft-context-chip { align-self: flex-start; color: var(--raft-fg); }
+.raft-context-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.raft-context-scope { flex-shrink: 0; padding-left: 4px; border-left: 1px solid var(--raft-line-hairline); color: var(--raft-fg-hint); }
+.raft-view .raft-context-chip .raft-chip-close { width: 16px; height: 16px; margin-right: -3px; border-radius: 4px; }
+.raft-view .raft-context-chip .raft-chip-close svg { width: 12px; height: 12px; }
+.raft-view textarea.raft-composer { display: block; width: 100%; min-height: 24px; max-height: 128px; height: 24px; padding: 0 2px; margin: 0; resize: none; overflow-y: auto; border: 0; border-radius: 0; box-shadow: none; outline: none; background: transparent; color: var(--raft-fg); font-family: var(--raft-font); font-size: 16px; line-height: 24px; }
+.raft-view textarea.raft-composer::placeholder { color: var(--raft-fg-hint); }
+.raft-view textarea.raft-composer:focus { box-shadow: none; }
+.raft-composer-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.raft-composer-tools { display: flex; align-items: center; gap: 2px; margin-left: -5px; }
+.raft-view .raft-icon-button.raft-send { border: 1.5px solid #141111; background: var(--raft-attention); color: #141111; box-shadow: 0 0 0 1.5px var(--raft-sticker-edge); }
+.raft-view .raft-icon-button.raft-send:hover:not(:disabled) { background: linear-gradient(rgba(20, 17, 17, .08), rgba(20, 17, 17, .08)), var(--raft-attention); color: #141111; }
+.raft-view .raft-icon-button.raft-send:disabled { border-color: var(--raft-line-hairline); background: var(--raft-fill-muted); color: var(--raft-fg-disabled); box-shadow: none; }
+.raft-mention-menu { position: absolute; left: 20px; right: 20px; bottom: calc(100% - 4px); z-index: 30; max-height: 280px; overflow-y: auto; padding: 4px; border-radius: 10px; background: var(--raft-popover); box-shadow: 0 0 0 1px var(--raft-line-seam), var(--raft-shadow-float); }
+.raft-mention-option { display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 8px; border-radius: 8px; cursor: pointer; font-size: 13px; line-height: 18px; }
+.raft-mention-option.is-active, .raft-mention-option:hover { background: var(--raft-fill-pressed); }
+.raft-mention-name { font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.raft-mention-handle { color: var(--raft-fg-hint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.raft-mention-kind { margin-left: auto; font-family: var(--raft-mono); font-size: 12px; color: var(--raft-fg-hint); }
+
+/* Login */
+.raft-login { display: flex; flex-direction: column; padding: 24px 20px; overflow-y: auto; }
+.raft-login-intro, .raft-login-form { width: 100%; max-width: 360px; margin-inline: auto; }
+.raft-login-intro h2 { margin: 0 0 6px; font-size: 17px; line-height: 22px; font-weight: 700; }
+.raft-login-intro p { margin: 0 0 18px; font-size: 13px; line-height: 18px; color: var(--raft-fg-hint); }
+.raft-login-form { display: flex; flex-direction: column; gap: 12px; }
+.raft-field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; line-height: 16px; font-weight: 500; color: var(--raft-fg-muted); }
+.raft-view .raft-field input { height: 36px; padding: 0 10px; border-radius: 8px; border: 1.5px solid var(--raft-line-seam); background: var(--raft-card); color: var(--raft-fg); font-family: var(--raft-font); font-size: 15px; box-shadow: none; }
+.raft-view .raft-field input:focus { border-color: var(--raft-line-strong); box-shadow: none; }
+.raft-view .raft-login-form > button { height: 36px; border-radius: 8px; border: 1.5px solid #141111; background: var(--raft-attention); color: #141111; font-size: 15px; font-weight: 700; box-shadow: 0 0 0 1.5px var(--raft-sticker-edge); }
+.raft-login-form > p, .raft-caption { margin: 0; font-size: 12px; line-height: 16px; color: var(--raft-fg-hint); }
+
+/* Preview modal */
+.raft-edit-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.raft-edit-columns > div { min-width: 0; }
+.raft-edit-columns h4 { margin-top: 12px; }
+.raft-edit-columns pre { max-height: 50vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; padding: 12px; border: 1px solid var(--background-modifier-border); border-radius: 10px; background: var(--background-secondary); font-size: 12px; user-select: text; }
+/* Touch: actions sit as a small row under the message body instead of a full-height column beside it. */
+@media (hover: none) { .raft-hover-toolbar { opacity: 1; pointer-events: auto; position: static; width: fit-content; margin: 4px 0 0; padding: 0; background: transparent; box-shadow: none; } .raft-hover-toolbar .raft-icon-button { width: 28px; height: 28px; touch-action: manipulation; } .raft-message:hover { background: transparent; } }
+@media (max-width: 600px) { .raft-edit-columns { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 340px) { .raft-message, .raft-composer-host { padding-inline: 12px; } .raft-header { padding-left: 12px; } }
+@media (prefers-reduced-motion: reduce) { .raft-view *, .raft-view *::before, .raft-view *::after { scroll-behavior: auto; transition: none; animation: none; } }
+
+.raft-applied-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; color: var(--raft-fg-muted); font-size: 12.5px; }
+.raft-applied-row button { height: 22px; padding: 0 8px; font-size: 12px; }
+
+/* Steward in the header: avatar with a presence dot. */
+.raft-steward { position: relative; display: inline-flex; flex-shrink: 0; }
+.raft-steward .raft-avatar { margin-top: 0; }
+.raft-presence { position: absolute; right: -2px; bottom: -2px; width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid var(--raft-canvas); background: var(--raft-inactive); }
+.raft-presence.is-online { background: oklch(82.72% .1354 130.07); }
+.raft-presence.is-busy { background: oklch(88.29% .1623 91.9); }
+.raft-presence.is-error { background: oklch(78.55% .1227 50.11); }
+.raft-presence.is-offline { background: oklch(78.92% .0137 71.29); }

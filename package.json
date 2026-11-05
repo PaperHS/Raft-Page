@@ -1,0 +1,25 @@
+{
+  "name": "raft-page",
+  "version": "0.5.0",
+  "private": true,
+  "license": "FSL-1.1-ALv2",
+  "description": "Raft channel conversations and document collaboration in Obsidian",
+  "scripts": {
+    "build": "tsc --noEmit && node esbuild.config.mjs",
+    "dev": "node esbuild.config.mjs --watch",
+    "test": "tsx --test tests/*.test.ts",
+    "package": "npm run build && node scripts/package.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "esbuild": "^0.25.0",
+    "obsidian": "latest",
+    "playwright-core": "^1.64.1",
+    "socket.io": "^4.8.4",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0"
+  },
+  "dependencies": {
+    "socket.io-client": "^4.8.4"
+  }
+}
