@@ -247,3 +247,9 @@
 .raft-presence.is-busy { background: oklch(88.29% .1623 91.9); }
 .raft-presence.is-error { background: oklch(78.55% .1227 50.11); }
 .raft-presence.is-offline { background: oklch(78.92% .0137 71.29); }
+
+/* Settings → Channel bindings */
+.raft-binding-icon { display: inline-flex; align-items: center; margin-right: 6px; color: var(--text-muted); vertical-align: -2px; }
+.raft-binding-icon svg { width: 14px; height: 14px; }
+.raft-binding-row .setting-item-name { display: flex; align-items: center; }
+.raft-binding-row .setting-item-description { font-variant-numeric: tabular-nums; }

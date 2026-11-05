@@ -1,4 +1,4 @@
-import { Plugin, ItemView, WorkspaceLeaf, MarkdownView, TFile, TFolder, Notice, Modal, Setting, PluginSettingTab, FuzzySuggestModal, requestUrl, type TAbstractFile, type Menu } from 'obsidian';
+import { Plugin, ItemView, WorkspaceLeaf, MarkdownView, TFile, TFolder, Notice, Modal, Setting, PluginSettingTab, FuzzySuggestModal, requestUrl, setIcon, type TAbstractFile, type Menu } from 'obsidian';
 import { io, type Socket } from 'socket.io-client';
 import { RaftClient, RaftClientError, type Session, type Message } from './src/client';
 import { RaftView, VIEW_TYPE } from './src/view';
@@ -254,9 +254,9 @@ export default class RaftPagePlugin extends Plugin {
     void this.chooseSteward(target.path, true).catch(() => {});
   }
   async unbindPath(path: string) { await this.saveBindings(unbind(this.bindings, path)); }
-  chooseChannel(target: TAbstractFile) {
+  chooseChannel(target: TAbstractFile, onDone?: () => void) {
     if (!this.session) { new Notice('Raft: sign in from the Raft sidebar first.'); return; }
-    void this.client.channels().then(channels => new ChannelPicker(this, target, channels).open(),
+    void this.client.channels().then(channels => new ChannelPicker(this, target, channels, onDone).open(),
       () => new Notice('Raft: channels could not be loaded.'));
   }
   revealInTree(path: string) {
@@ -792,7 +792,8 @@ class EditPreview extends Modal {
   onClose() { this.contentEl.empty(); }
 }
 class ChannelPicker extends FuzzySuggestModal<{ id: string; name: string }> {
-  constructor(private plugin: RaftPagePlugin, private target: TAbstractFile, private channels: { id: string; name: string }[]) {
+  constructor(private plugin: RaftPagePlugin, private target: TAbstractFile, private channels: { id: string; name: string }[],
+    private onDone?: () => void) {
     super(plugin.app);
     this.setPlaceholder(`Bind ${target.path} to a channel…`);
   }
@@ -800,19 +801,23 @@ class ChannelPicker extends FuzzySuggestModal<{ id: string; name: string }> {
   getItemText(channel: { id: string; name: string }) { return `#${channel.name}`; }
   onChooseItem(channel: { id: string; name: string }) {
     void this.plugin.bindPath(this.target, channel).then(() => new Notice(`Bound ${this.target.path} to #${channel.name}`),
-      cause => new Notice(`Raft: ${cause instanceof Error ? cause.message : 'binding failed.'}`));
+      cause => new Notice(`Raft: ${cause instanceof Error ? cause.message : 'binding failed.'}`))
+      .finally(() => this.onDone?.());
   }
 }
 type StewardChoice = { id: string; name: string; displayName?: string } | null;
 class StewardPicker extends FuzzySuggestModal<StewardChoice> {
-  constructor(private plugin: RaftPagePlugin, private path: string, private agents: { id: string; name: string; displayName?: string }[]) {
+  constructor(private plugin: RaftPagePlugin, private path: string, private agents: { id: string; name: string; displayName?: string }[],
+    private onDone?: () => void) {
     super(plugin.app);
     this.setPlaceholder(`Choose the agent that keeps ${path} up to date…`);
   }
   getItems(): StewardChoice[] { return [null, ...this.agents]; }
   getItemText(agent: StewardChoice) { return agent ? `@${agent.name}${agent.displayName && agent.displayName !== agent.name ? ` (${agent.displayName})` : ''}` : 'No steward — no automatic updates'; }
   onChooseItem(agent: StewardChoice) {
-    void this.plugin.setSteward(this.path, agent).catch(cause => new Notice(`Raft: ${cause instanceof Error ? cause.message : 'could not set the steward.'}`));
+    void this.plugin.setSteward(this.path, agent)
+      .catch(cause => new Notice(`Raft: ${cause instanceof Error ? cause.message : 'could not set the steward.'}`))
+      .finally(() => this.onDone?.());
   }
 }
 class RaftSettingsTab extends PluginSettingTab {
@@ -838,5 +843,66 @@ class RaftSettingsTab extends PluginSettingTab {
         void this.plugin.saveSettings();
       }));
     new Setting(el).setName('Open Raft conversations').addButton(b => b.setButtonText('Open sidebar').onClick(() => void this.plugin.openView()));
+    this.renderBindings(el);
+  }
+
+  /** Lists every channel binding with its steward, so both can be reviewed and changed without hunting the vault. */
+  private renderBindings(el: HTMLElement) {
+    const bindings = Object.entries(this.plugin.bindings).sort(([a], [b]) => a.localeCompare(b));
+    el.createEl('h3', { text: 'Channel bindings' });
+    if (!bindings.length) {
+      el.createEl('p', { text: 'No notes or folders are bound yet. Right-click a note or folder and choose “Bind to Raft channel…”.' });
+      return;
+    }
+    const serverId = this.plugin.session?.serverId;
+    el.createEl('p', { text: `${bindings.length} bound ${bindings.length === 1 ? 'path' : 'paths'}. A note without its own binding follows the nearest folder above it.` });
+    for (const [path, binding] of bindings) {
+      const elsewhere = serverId && binding.serverId !== serverId;
+      const setting = new Setting(el)
+        .setName(binding.kind === 'folder' ? `${path}/` : path)
+        .setDesc([`#${binding.channelName || binding.channelId}`,
+          binding.stewardName ? `steward @${binding.stewardName}` : 'no steward',
+          binding.paused ? 'paused' : null,
+          elsewhere ? 'another server' : null].filter(Boolean).join(' · '));
+      setting.settingEl.addClass('raft-binding-row');
+      if (binding.kind === 'folder') setting.nameEl.prepend(this.iconEl('folder'));
+      else setting.nameEl.prepend(this.iconEl('file-text'));
+
+      // A binding made against another server cannot be queried through this session's client, so only offer the
+      // actions that stay local.
+      const local = !elsewhere;
+      // Change steward: offer the channel's agents, plus "no steward".
+      if (local) setting.addExtraButton(button => button.setIcon('bot').setTooltip(binding.stewardName ? 'Change steward' : 'Choose steward')
+        .onClick(() => {
+          if (!this.plugin.session) { new Notice('Raft: sign in from the Raft sidebar first.'); return; }
+          void this.plugin.client.agents(binding.channelId).then(agents => {
+            new StewardPicker(this.plugin, path, agents, () => this.display()).open();
+          }, () => new Notice('Raft: the channel members could not be loaded.'));
+        }));
+      if (local && binding.stewardName) {
+        setting.addExtraButton(button => button.setIcon('user-x').setTooltip('Remove steward')
+          .onClick(() => void this.plugin.setSteward(path, null).then(() => this.display())));
+      }
+      if (local) setting.addExtraButton(button => button.setIcon(binding.paused ? 'play' : 'pause')
+        .setTooltip(binding.paused ? 'Resume automatic updates' : 'Pause automatic updates')
+        .onClick(() => void this.plugin.setPaused(path, !binding.paused).then(() => this.display())));
+      if (local) setting.addExtraButton(button => button.setIcon('link-2').setTooltip('Rebind to another channel')
+        .onClick(() => {
+          const target = this.app.vault.getAbstractFileByPath(path);
+          if (!target) { new Notice(`Raft: ${path} is no longer in this vault.`); return; }
+          this.plugin.chooseChannel(target, () => this.display());
+        }));
+      setting.addExtraButton(button => button.setIcon('unlink').setTooltip('Unbind')
+        .onClick(() => void this.plugin.unbindPath(path).then(() => { new Notice(`Raft: ${path} is no longer bound.`); this.display(); })));
+      setting.addExtraButton(button => button.setIcon('crosshair').setTooltip('Show in file explorer')
+        .onClick(() => this.plugin.revealInTree(path)));
+    }
+  }
+
+  private iconEl(name: string): HTMLElement {
+    const span = document.createElement('span');
+    span.addClass('raft-binding-icon');
+    setIcon(span, name);
+    return span;
   }
 }

@@ -48,6 +48,7 @@ const result = await build({
         export class ItemView {} export class WorkspaceLeaf {} export class Notice {}
         export class Modal {} export class Setting {} export class PluginSettingTab {}
         export function requestUrl() { throw new Error('Network access is forbidden in main tests'); }
+        export function setIcon() {}
       ` };
     });
   } }],
