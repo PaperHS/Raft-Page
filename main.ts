@@ -93,6 +93,10 @@ export default class RaftPagePlugin extends Plugin {
       const file = this.app.workspace.getActiveFile();
       if (file) this.chooseChannel(file.parent && file.parent.path !== '/' ? file.parent : file);
     } });
+    this.addCommand({ id: 'toggle-keyboard-debug', name: 'Toggle keyboard layout metrics overlay', callback: () => {
+      this.keyboardDebug = !this.keyboardDebug;
+      for (const view of this.views()) view.setKeyboardDebug(this.keyboardDebug);
+    } });
     this.addSettingTab(new RaftSettingsTab(this.app, this));
     await this.loadBindings();
     this.registerEvent(this.app.workspace.on('file-menu', (menu: Menu, file: TAbstractFile) => this.fileMenu(menu, file)));
@@ -139,6 +143,8 @@ export default class RaftPagePlugin extends Plugin {
     if (this.socketTimer) window.clearTimeout(this.socketTimer);
     this.session = undefined;
   }
+
+  private keyboardDebug = false;
 
   private views(): RaftView[] {
     return this.app.workspace.getLeavesOfType(VIEW_TYPE).map(l => l.view).filter((v): v is RaftView => v instanceof RaftView);

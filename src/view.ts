@@ -1,4 +1,4 @@
-import { ItemView, MarkdownRenderer, Menu, Modal, requestUrl, setIcon, type App, type WorkspaceLeaf } from 'obsidian';
+import { ItemView, MarkdownRenderer, Menu, Modal, Platform, requestUrl, setIcon, type App, type WorkspaceLeaf } from 'obsidian';
 import type RaftPagePlugin from '../main';
 import { RaftClientError, type Member, type Message, type ThreadSummary } from './client';
 import { splitEditBlocks, splitNoteContext, type Proposal } from './documents';
@@ -46,6 +46,8 @@ export class RaftView extends ItemView {
   private headerTile!: HTMLElement;
   private threadTitle!: HTMLElement;
   private composer!: HTMLTextAreaElement;
+  private keyboardDebug = false;
+  private keyboardDebugEl?: HTMLElement;
   private sendButton!: HTMLButtonElement;
   private refreshButton!: HTMLButtonElement;
   private olderButton!: HTMLButtonElement;
@@ -82,24 +84,67 @@ export class RaftView extends ItemView {
   /**
    * On phones the software keyboard covers the bottom of the view without resizing it, hiding the composer. The
    * visual viewport shrinks instead, so pad the view by however much of it lies below the visible area.
+   *
+   * Which signal moves depends on the host: a plain WKWebView shrinks `visualViewport`, some hosts resize the window
+   * instead, and a few do both. Take the smallest visible bottom of all of them, and re-measure a few times after
+   * focus, because the keyboard animates in and the metrics settle well after the event fires.
    */
   private watchKeyboard(): void {
-    const viewport = this.containerEl.ownerDocument.defaultView?.visualViewport;
-    if (!viewport) return;
+    if (!Platform.isMobile) return;
+    const win = this.containerEl.ownerDocument.defaultView;
+    const viewport = win?.visualViewport;
     const update = () => {
-      const covered = Math.max(0, this.contentEl.getBoundingClientRect().bottom - (viewport.offsetTop + viewport.height));
-      const value = `${Math.round(covered)}px`;
+      const doc = this.containerEl.ownerDocument;
+      const layoutBottom = win?.innerHeight ?? doc.documentElement.clientHeight;
+      const visibleBottom = viewport
+        ? Math.min(layoutBottom, viewport.offsetTop + viewport.height)
+        : layoutBottom;
+      const covered = Math.max(0, Math.round(this.contentEl.getBoundingClientRect().bottom - visibleBottom));
+      if (this.keyboardDebug) {
+        this.renderKeyboardDebug({
+          covered, layoutBottom, visibleHeight: viewport?.height, offsetTop: viewport?.offsetTop,
+          contentBottom: Math.round(this.contentEl.getBoundingClientRect().bottom),
+        });
+      }
+      const value = `${covered}px`;
       if (this.contentEl.style.getPropertyValue('--raft-keyboard') === value) return;
       this.contentEl.style.setProperty('--raft-keyboard', value);
       if (covered && this.composer && this.containerEl.ownerDocument.activeElement === this.composer && this.history) {
         this.history.scrollTop = this.history.scrollHeight;
       }
     };
-    viewport.addEventListener('resize', update);
-    viewport.addEventListener('scroll', update);
-    this.register(() => { viewport.removeEventListener('resize', update); viewport.removeEventListener('scroll', update); });
-    this.registerDomEvent(this.contentEl, 'focusin', () => window.setTimeout(update, 300));
-    this.registerDomEvent(this.contentEl, 'focusout', () => window.setTimeout(update, 300));
+    const remeasure = () => {
+      for (const delay of [50, 150, 300, 600, 1000]) win?.setTimeout(update, delay);
+    };
+    if (viewport) {
+      viewport.addEventListener('resize', update);
+      viewport.addEventListener('scroll', update);
+      this.register(() => { viewport.removeEventListener('resize', update); viewport.removeEventListener('scroll', update); });
+    }
+    if (win) {
+      win.addEventListener('resize', update);
+      win.addEventListener('orientationchange', update);
+      this.register(() => { win.removeEventListener('resize', update); win.removeEventListener('orientationchange', update); });
+    }
+    this.registerDomEvent(this.contentEl, 'focusin', remeasure);
+    this.registerDomEvent(this.contentEl, 'focusout', remeasure);
+  }
+
+  /** Toggles the on-screen keyboard metrics overlay used to diagnose mobile layout issues. */
+  public setKeyboardDebug(on: boolean): void {
+    this.keyboardDebug = on;
+    this.keyboardDebugEl?.remove();
+    this.keyboardDebugEl = undefined;
+    if (on) this.renderKeyboardDebug({});
+  }
+
+  private renderKeyboardDebug(metrics: Record<string, number | undefined>): void {
+    if (!this.keyboardDebug) return;
+    if (!this.keyboardDebugEl) {
+      this.keyboardDebugEl = this.contentEl.createDiv({ cls: 'raft-keyboard-debug' });
+      this.keyboardDebugEl.setAttribute('style', 'position:fixed;left:8px;top:8px;z-index:9999;padding:4px 6px;border-radius:6px;background:#000c;color:#fff;font:11px/14px monospace;white-space:pre;pointer-events:none');
+    }
+    this.keyboardDebugEl.setText(Object.entries(metrics).map(([k, v]) => `${k}: ${v ?? '-'}`).join('\n'));
   }
 
   async onClose(): Promise<void> {
