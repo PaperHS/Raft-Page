@@ -112,7 +112,7 @@ The steward records the channel's decision in the bound note; the message shows 
 
 On a phone (Obsidian's mobile layout at iPhone size):
 
-<img src="assets/mobile-chat.png" alt="Raft Page in Obsidian's mobile layout" width="300">
+<img src="assets/mobile-chat-framed.png" alt="Raft Page in Obsidian's mobile layout" width="300">
 
 The conversation in the screenshots is fictional; the photo is CC0 ([credits](assets/CREDITS.md)).
 
