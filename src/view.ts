@@ -82,54 +82,87 @@ export class RaftView extends ItemView {
   }
 
   /**
-   * On phones the software keyboard covers the bottom of the view without resizing it, hiding the composer. The
-   * visual viewport shrinks instead, so pad the view by however much of it lies below the visible area.
+   * On phones the software keyboard covers the bottom of the view without resizing it, hiding the composer.
    *
-   * Which signal moves depends on the host: a plain WKWebView shrinks `visualViewport`, some hosts resize the window
-   * instead, and a few do both. Take the smallest visible bottom of all of them, and re-measure a few times after
-   * focus, because the keyboard animates in and the metrics settle well after the event fires.
+   * Obsidian's mobile shell is Capacitor, whose Keyboard plugin emits `keyboardWillShow` / `keyboardDidShow` on
+   * `window` with a `keyboardHeight` in the event detail. That is the only reliable signal here: on iOS neither
+   * `innerHeight` nor `visualViewport` changes when the keyboard opens, so measuring the viewport finds nothing.
+   * Fall back to a configured height, then to the viewport, for hosts that only offer those.
    */
   private watchKeyboard(): void {
     if (!Platform.isMobile) return;
     const win = this.containerEl.ownerDocument.defaultView;
-    const viewport = win?.visualViewport;
+    if (!win) return;
+    const viewport = win.visualViewport;
+    // Height reported by the Capacitor Keyboard plugin while the keyboard is up; 0 when unknown or hidden.
+    let nativeHeight = 0;
+    let keyboardVisible = false;
+
     const update = () => {
       const doc = this.containerEl.ownerDocument;
-      const layoutBottom = win?.innerHeight ?? doc.documentElement.clientHeight;
-      const visibleBottom = viewport
-        ? Math.min(layoutBottom, viewport.offsetTop + viewport.height)
-        : layoutBottom;
-      let covered = Math.max(0, Math.round(this.contentEl.getBoundingClientRect().bottom - visibleBottom));
-      // iOS Obsidian moves neither viewport when the keyboard opens, so nothing above can see it. Fall back to the
-      // configured height, applied only while the composer holds focus.
+      const layoutBottom = win.innerHeight ?? doc.documentElement.clientHeight;
+      const contentBottom = Math.round(this.contentEl.getBoundingClientRect().bottom);
       const manual = this.plugin.settings.mobileKeyboardHeight ?? 0;
-      if (manual > 0) covered = this.containerEl.ownerDocument.activeElement === this.composer ? manual : 0;
+      // Space the host already leaves below the composer (its own toolbar), which the keyboard overlaps too.
+      const inset = Math.max(0, layoutBottom - contentBottom);
+      let covered = 0;
+      let source = 'viewport';
+      if (nativeHeight > 0) {
+        covered = Math.max(0, Math.round(nativeHeight - inset));
+        source = 'native';
+      } else if (keyboardVisible) {
+        // The event fired without a usable height: prefer the configured value, else assume a typical keyboard.
+        covered = manual > 0 ? manual : Math.max(0, Math.round(layoutBottom * 0.45) - inset);
+        source = manual > 0 ? 'manual' : 'estimate';
+      } else if (manual > 0 && doc.activeElement === this.composer) {
+        covered = manual;
+        source = 'manual';
+      } else {
+        const visibleBottom = viewport ? Math.min(layoutBottom, viewport.offsetTop + viewport.height) : layoutBottom;
+        covered = Math.max(0, contentBottom - visibleBottom);
+      }
       if (this.keyboardDebug) {
         this.renderKeyboardDebug({
-          covered, layoutBottom, visibleHeight: viewport?.height, offsetTop: viewport?.offsetTop,
-          contentBottom: Math.round(this.contentEl.getBoundingClientRect().bottom), manual,
-        }, this.containerEl.ownerDocument.body.className);
+          covered, layoutBottom, contentBottom, manual,
+          nativeHeight, keyboardVisible: keyboardVisible ? 1 : 0,
+          visibleHeight: viewport ? Math.round(viewport.height) : undefined,
+        }, this.containerEl.ownerDocument.body.className, source);
       }
       const value = `${covered}px`;
       if (this.contentEl.style.getPropertyValue('--raft-keyboard') === value) return;
       this.contentEl.style.setProperty('--raft-keyboard', value);
-      if (covered && this.composer && this.containerEl.ownerDocument.activeElement === this.composer && this.history) {
+      if (covered && this.composer && doc.activeElement === this.composer && this.history) {
         this.history.scrollTop = this.history.scrollHeight;
       }
     };
-    const remeasure = () => {
-      for (const delay of [50, 150, 300, 600, 1000]) win?.setTimeout(update, delay);
+
+    const readHeight = (event: Event) => {
+      const detail = (event as CustomEvent).detail as { keyboardHeight?: number } | undefined;
+      let height = detail?.keyboardHeight ?? 0;
+      // Capacitor reports points; guard against a device-pixel value just in case.
+      if (height > 0 && height > win.innerHeight) height = height / (win.devicePixelRatio || 1);
+      nativeHeight = height;
+      keyboardVisible = true;
+      update();
+      for (const delay of [50, 150, 300, 600]) win.setTimeout(update, delay);
     };
+    const onHide = () => { nativeHeight = 0; keyboardVisible = false; update(); };
+    const remeasure = () => { for (const delay of [50, 150, 300, 600, 1000]) win.setTimeout(update, delay); };
+
+    for (const name of ['keyboardWillShow', 'keyboardDidShow']) win.addEventListener(name, readHeight);
+    for (const name of ['keyboardWillHide', 'keyboardDidHide']) win.addEventListener(name, onHide);
+    this.register(() => {
+      for (const name of ['keyboardWillShow', 'keyboardDidShow']) win.removeEventListener(name, readHeight);
+      for (const name of ['keyboardWillHide', 'keyboardDidHide']) win.removeEventListener(name, onHide);
+    });
     if (viewport) {
       viewport.addEventListener('resize', update);
       viewport.addEventListener('scroll', update);
       this.register(() => { viewport.removeEventListener('resize', update); viewport.removeEventListener('scroll', update); });
     }
-    if (win) {
-      win.addEventListener('resize', update);
-      win.addEventListener('orientationchange', update);
-      this.register(() => { win.removeEventListener('resize', update); win.removeEventListener('orientationchange', update); });
-    }
+    win.addEventListener('resize', update);
+    win.addEventListener('orientationchange', update);
+    this.register(() => { win.removeEventListener('resize', update); win.removeEventListener('orientationchange', update); });
     this.registerDomEvent(this.contentEl, 'focusin', remeasure);
     this.registerDomEvent(this.contentEl, 'focusout', remeasure);
   }
@@ -142,13 +175,14 @@ export class RaftView extends ItemView {
     if (on) this.renderKeyboardDebug({});
   }
 
-  private renderKeyboardDebug(metrics: Record<string, number | undefined>, bodyClass?: string): void {
+  private renderKeyboardDebug(metrics: Record<string, number | undefined>, bodyClass?: string, source?: string): void {
     if (!this.keyboardDebug) return;
     if (!this.keyboardDebugEl) {
       this.keyboardDebugEl = this.contentEl.createDiv({ cls: 'raft-keyboard-debug' });
       this.keyboardDebugEl.setAttribute('style', 'position:fixed;left:8px;top:8px;z-index:9999;padding:4px 6px;border-radius:6px;background:#000c;color:#fff;font:11px/14px monospace;white-space:pre-wrap;max-width:92vw;pointer-events:none');
     }
-    const lines = Object.entries(metrics).map(([k, v]) => `${k}: ${v ?? '-'}`);
+    const lines = Object.entries(metrics).filter(([, v]) => v !== undefined).map(([k, v]) => `${k}: ${v ?? '-'}`);
+    if (source) lines.push(`source: ${source}`);
     // The body class tells us whether the host marks the keyboard itself, which would beat the manual setting.
     if (bodyClass !== undefined) lines.push(`body: ${bodyClass || '(none)'}`);
     this.keyboardDebugEl.setText(lines.join('\n'));
