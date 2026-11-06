@@ -29,6 +29,15 @@ export interface Session {
   serverId: string;
   /** The server's short name, as in Raft web addresses (/s/<slug>). */
   serverSlug?: string;
+  /** The server's display name, when Raft reported one. */
+  serverName?: string;
+}
+
+/** A server the signed-in account belongs to. */
+export interface ServerInfo {
+  id: string;
+  slug?: string;
+  name?: string;
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -347,6 +356,16 @@ function list(value: unknown, key: string): unknown[] {
   return Array.isArray(rows) ? rows : schemaError();
 }
 
+function serverList(value: unknown): ServerInfo[] {
+  return list(value, "servers").flatMap(value => {
+    const row = object(value);
+    const id = identifier(row?.id);
+    if (!id) return [];
+    const slug = text(row?.slug), name = text(row?.name);
+    return [{ id, ...(slug ? { slug } : {}), ...(name ? { name } : {}) }];
+  });
+}
+
 function pageQuery(options: MessagePageOptions): string {
   const params = new URLSearchParams();
   const limit = options.limit ?? 50;
@@ -424,12 +443,9 @@ export class RaftClient {
     const refreshToken = text(payload?.refreshToken);
     const userId = identifier(user?.id, user?.userId);
     if (!accessToken || !refreshToken || !userId) return schemaError();
-    const servers = list(await this.request({
+    const servers = serverList(await this.request({
       url: `${apiUrl}/api/servers`, method: "GET", headers: { Authorization: `Bearer ${accessToken}` },
-    }), "servers").map(value => {
-      const row = object(value);
-      return { id: identifier(row?.id), slug: text(row?.slug), name: text(row?.name) };
-    }).filter((row): row is { id: string; slug: string | undefined; name: string | undefined } => !!row.id);
+    }));
     const chosen = ref.id ? servers.find(row => row.id === ref.id)
       : ref.slug ? servers.find(row => row.slug?.toLowerCase() === ref.slug)
       : servers.length === 1 ? servers[0] : undefined;
@@ -441,6 +457,7 @@ export class RaftClient {
     }
     const session: Session = {
       apiUrl, accessToken, refreshToken, userId, serverId: chosen.id, ...(chosen.slug ? { serverSlug: chosen.slug } : {}),
+      ...(chosen.name ? { serverName: chosen.name } : {}),
       userName: text(user?.displayName, user?.name, user?.username) ?? userId,
     };
     if (generation !== this.generation) throw this.expired();
@@ -478,6 +495,25 @@ export class RaftClient {
     try { await this.setSession(next); }
     catch { throw new RaftClientError("SESSION_ERROR", "Unable to save the Raft session."); }
     return next;
+  }
+
+  /** The servers this account belongs to, for switching without signing in again. */
+  async servers(): Promise<ServerInfo[]> {
+    return serverList(await this.authenticated("GET", "/api/servers"));
+  }
+
+  /**
+   * Revokes the refresh token, as Raft web does on sign out. Best effort: a network failure must not keep the user
+   * signed in, so errors are swallowed and the caller clears the local session regardless.
+   */
+  async revoke(session: Session): Promise<void> {
+    try {
+      await this.request({
+        url: `${normalizeApiUrl(session.apiUrl)}/api/auth/logout`, method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.accessToken}` },
+        body: { refreshToken: session.refreshToken },
+      });
+    } catch { /* The local session is cleared either way. */ }
   }
 
   async channels(): Promise<Channel[]> {

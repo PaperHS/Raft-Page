@@ -303,6 +303,15 @@ export class RaftView extends ItemView {
     menu.showAtMouseEvent(event);
   }
 
+  /** Starts over after a sign out or server switch made elsewhere, such as in settings. */
+  public async reload(): Promise<void> {
+    if (this.closed) return;
+    // Drafts are already kept on every keystroke; the channel setting has moved on by now.
+    this.invalidate();
+    if (this.plugin.session) this.renderConversation();
+    await this.refresh();
+  }
+
   /** Refreshes login state, available channels, and channel-wide history. */
   public async refresh(): Promise<void> {
     if (this.closed) return;

@@ -1,6 +1,6 @@
 import { Plugin, ItemView, WorkspaceLeaf, MarkdownView, TFile, TFolder, Notice, Modal, Setting, PluginSettingTab, FuzzySuggestModal, requestUrl, setIcon, type TAbstractFile, type Menu } from 'obsidian';
 import { io, type Socket } from 'socket.io-client';
-import { RaftClient, RaftClientError, type Session, type Message } from './src/client';
+import { RaftClient, RaftClientError, type Session, type Message, type ServerInfo } from './src/client';
 import { RaftView, VIEW_TYPE } from './src/view';
 import { BRIEF_VERSION, QUIET_MS, composeSyncRequest, syncRootMessage, lastSyncedThrough, newActivity, parseNeeds } from './src/sync';
 import { safeNotePath } from './src/edits';
@@ -177,6 +177,7 @@ export default class RaftPagePlugin extends Plugin {
     catch { new Notice('Raft: login is kept for this session only.'); }
   }
   async signOut() {
+    const previous = this.session;
     this.generation++;
     this.session = undefined;
     this.storeSession();
@@ -184,7 +185,30 @@ export default class RaftPagePlugin extends Plugin {
     this.watchedChannels.clear();
     this.settings.channelId = ''; this.settings.agent = '';
     await this.saveSettings();
+    // Revoke after the local session is gone, so a slow or failed request never keeps anyone signed in.
+    if (previous) void this.client.revoke(previous);
   }
+  /** Moves the signed-in account to another of its servers. Raft tokens are per account; the server is a header. */
+  async switchServer(server: ServerInfo) {
+    const current = this.session;
+    if (!current) throw new Error('Sign in first.');
+    if (server.id === current.serverId) return;
+    const next: Session = { ...current, serverId: server.id, serverSlug: server.slug, serverName: server.name };
+    if (!next.serverSlug) delete next.serverSlug;
+    if (!next.serverName) delete next.serverName;
+    this.generation++;
+    this.session = next;
+    this.storeSession();
+    this.watchedChannels.clear();
+    this.agentActivity.clear();
+    this.threadParents.clear();
+    Object.assign(this.settings, { serverId: next.serverId, serverSlug: next.serverSlug ?? '', channelId: '', agent: '' });
+    await this.saveSettings();
+    this.connectRealtime();
+    this.reloadViews();
+  }
+  /** Re-renders open Raft panes after the account or server changed outside them. */
+  reloadViews() { for (const view of this.views()) void view.reload(); }
   private connectRealtime() {
     this.socket?.disconnect();
     if (!this.session || !this.active) return;
@@ -911,6 +935,7 @@ class RaftSettingsTab extends PluginSettingTab {
     const el = this.containerEl; el.empty();
     el.createEl('h2', { text: 'Raft Page' });
     el.createEl('p', { text: 'Open the Raft sidebar to sign in and choose a channel. Only attached notes or selected text are sent with your messages.' });
+    this.renderAccount(el);
     el.createEl('p', { text: this.app.secretStorage ? 'Login tokens use Obsidian SecretStorage. Passwords are never saved.' : 'This Obsidian version has no SecretStorage. Login lasts until the plugin closes; passwords and tokens are not written to plugin settings.' });
     new Setting(el).setName('Apply agent edits automatically')
       .setDesc('Write an agent\'s change into the note as soon as it arrives. A change is still refused if the note was edited after it was sent. Turn off to review each change first.')
@@ -929,6 +954,52 @@ class RaftSettingsTab extends PluginSettingTab {
       }));
     new Setting(el).setName('Open Raft conversations').addButton(b => b.setButtonText('Open sidebar').onClick(() => void this.plugin.openView()));
     this.renderBindings(el);
+  }
+
+  /** Shows where the plugin is signed in, and lets the user switch server or sign out without opening the sidebar. */
+  private renderAccount(el: HTMLElement) {
+    el.createEl('h3', { text: 'Account' });
+    const session = this.plugin.session;
+    new Setting(el).setName('Server URL').setDesc(session?.apiUrl ?? this.plugin.settings.apiUrl);
+    if (!session) {
+      new Setting(el).setName('Not signed in').setDesc('Sign in from the Raft sidebar.')
+        .addButton(b => b.setButtonText('Open sidebar').onClick(() => void this.plugin.openView()));
+      return;
+    }
+    const label = (server: ServerInfo) => [server.name, server.slug ? `/${server.slug}` : null].filter(Boolean).join(' · ') || server.id;
+    const current: ServerInfo = { id: session.serverId, slug: session.serverSlug, name: session.serverName };
+    const server = new Setting(el).setName('Server').setDesc(label(current));
+    server.settingEl.addClass('raft-account-server');
+    server.addDropdown(dropdown => {
+      dropdown.addOption(session.serverId, label(current)).setValue(session.serverId).setDisabled(true);
+      void this.plugin.client.servers().then(servers => {
+        if (this.plugin.session !== session) return;
+        const known = servers.find(s => s.id === session.serverId);
+        // Fill in a name or slug saved before the plugin kept them.
+        if (known) server.setDesc(label(known));
+        dropdown.selectEl.empty();
+        for (const s of known ? servers : [current, ...servers]) dropdown.addOption(s.id, label(s));
+        dropdown.setValue(session.serverId).setDisabled(servers.length < 2);
+        dropdown.onChange(id => {
+          const chosen = servers.find(s => s.id === id);
+          if (!chosen) return;
+          void this.plugin.switchServer(chosen).then(() => {
+            new Notice(`Raft: switched to ${label(chosen)}.`);
+            this.display();
+          }, cause => { new Notice(`Raft: ${cause instanceof Error ? cause.message : 'could not switch server.'}`); this.display(); });
+        });
+      }, () => { if (this.plugin.session === session) server.setDesc(`${label(current)} · server list unavailable`); });
+    });
+    new Setting(el).setName('Signed in as').setDesc(session.userName || session.userId)
+      .addButton(b => b.setButtonText('Sign out').setWarning().onClick(() => {
+        b.setDisabled(true);
+        void this.plugin.signOut().then(() => {
+          this.plugin.reloadViews();
+          new Notice('Raft: signed out.');
+          this.display();
+        });
+      }));
+    el.createEl('p', { cls: 'setting-item-description', text: 'To use a different server URL or account, sign out and sign in again from the sidebar.' });
   }
 
   /** Lists every channel binding with its steward, so both can be reviewed and changed without hunting the vault. */

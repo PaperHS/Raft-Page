@@ -31,6 +31,7 @@ const result = await build({
       if (args.path === './src/client') return { contents: `export class RaftClientError extends Error {}
         export class RaftClient {
         constructor(transport, getSession, setSession) { this.publishSession = setSession; }
+        async revoke(session) { (this.revoked ||= []).push(session); }
       }` };
       if (args.path === './src/view') return { contents: `export const VIEW_TYPE = 'raft-page'; export class RaftView {}` };
       if (args.path === 'socket.io-client') return { contents: `export function io() { return { on() {}, emit() {}, disconnect() {} }; }` };
@@ -721,4 +722,34 @@ test('credentials use SecretStorage and never enter plugin data', async () => {
   assert.doesNotMatch(JSON.stringify(f.app.saved), /secret-token|refresh-secret|accessToken|refreshToken/);
   await f.plugin.signOut();
   assert.ok([...f.secrets.values()].every(value => value === ''));
+});
+
+test('switching server keeps the account tokens, moves the session and settings, and cancels pending work', async () => {
+  const f = await fixture();
+  f.plugin.settings.channelId = 'channel-a'; f.plugin.settings.agent = 'writer'; f.plugin.settings.apiUrl = 'https://raft.test';
+  await f.plugin.switchServer({ id: 'server-b', slug: 'bee', name: 'Bee' });
+  assert.equal(f.plugin.session.serverId, 'server-b');
+  assert.equal(f.plugin.session.serverSlug, 'bee');
+  assert.equal(f.plugin.session.serverName, 'Bee');
+  assert.equal(f.plugin.session.accessToken, 'secret-token');
+  assert.equal(f.plugin.settings.serverId, 'server-b');
+  assert.equal(f.plugin.settings.serverSlug, 'bee');
+  assert.equal(f.plugin.settings.channelId, '');
+  assert.equal(f.plugin.settings.agent, '');
+  const stored = JSON.parse([...f.secrets.values()][0]);
+  assert.equal(stored.serverId, 'server-b');
+  // The stored session still matches settings, so it is restored after a restart.
+  const again = new Plugin(f.app); await again.onload();
+  assert.equal(again.session?.serverId, 'server-b');
+  // A note snapshot taken on the old server is no longer applicable.
+  await assert.rejects(f.plugin.applyProposal(f.proposal));
+});
+
+test('sign out revokes the old refresh token after clearing the local session', async () => {
+  const f = await fixture();
+  await f.plugin.signOut();
+  assert.equal(f.plugin.session, undefined);
+  assert.equal(f.plugin.client.revoked?.[0]?.refreshToken, 'refresh-secret');
+  await f.plugin.signOut();
+  assert.equal(f.plugin.client.revoked.length, 1, 'nothing to revoke when already signed out');
 });

@@ -451,3 +451,24 @@ test("sign in picks the server by its short name, or the only server, and never 
   await byId.client.signIn("https://raft.example", "alice", "pw", "00000000-1111-4222-8333-444444444444");
   assert.equal(byId.requests[0].headers["X-Server-Id"], "00000000-1111-4222-8333-444444444444");
 });
+
+test("servers lists the account's servers with the current server header, and revoke posts the refresh token", async () => {
+  const h = harness([{ status: 200, json: [{ id: "s1", slug: "one", name: "One" }, { id: "s2" }, { slug: "no-id" }] }, { status: 200, json: { ok: true } }]);
+  assert.deepEqual(await h.client.servers(), [{ id: "s1", slug: "one", name: "One" }, { id: "s2" }]);
+  assert.equal(h.requests[0].url, "http://192.168.1.20:4000/api/servers");
+  assert.equal(h.requests[0].headers["X-Server-Id"], "server-1");
+  await h.client.revoke(existingSession);
+  assert.deepEqual(h.requests[1], {
+    url: "http://192.168.1.20:4000/api/auth/logout", method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: "Bearer access-secret" },
+    body: { refreshToken: "refresh-secret" },
+  });
+  const offline = new RaftClient(async () => { throw new Error("offline"); }, () => existingSession, () => {});
+  await offline.revoke(existingSession);
+});
+
+test("sign in keeps the server's display name", async () => {
+  const h = harness([{ status: 200, json: { user: { id: "u1" }, accessToken: "a", refreshToken: "r" } },
+    { status: 200, json: [{ id: "s1", slug: "one", name: "Team One" }] }], null);
+  assert.equal((await h.client.signIn("https://raft.example", "alice", "pw", "")).serverName, "Team One");
+});

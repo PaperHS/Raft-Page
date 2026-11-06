@@ -30,6 +30,8 @@ const mock = createServer(async (req, res) => {
   res.setHeader('content-type', 'application/json');
   const json = value => res.end(JSON.stringify(value));
   if (url.pathname === '/api/servers') return json([{ id: 'other-server', slug: 'other', name: 'Other' }, { id: 'test-server', slug: 'plugin-test', name: 'Plugin test' }]);
+  if (url.pathname === '/api/auth/logout') { logouts.push({ body, auth: req.headers.authorization }); return json({ ok: true }); }
+  serverHeaders.push(req.headers['x-server-id']);
   if (url.pathname === '/api/auth/login') return json({ user: { id: 'test-human', name: 'Test user' }, accessToken: 'mock-access', refreshToken: 'mock-refresh' });
   if (url.pathname === '/api/channels') return json([{ id: 'test-channel', name: 'Plugin test', joined: true, type: 'channel' }, { id: 'second-channel', name: 'Second', joined: true, type: 'channel' }]);
   if (url.pathname.endsWith('/members')) return json({ agents: [{ id: 'test-agent', name: 'TestAgent', displayName: 'Test Agent', avatarUrl: 'pixel:random:test-agent', activity: 'online' }, { id: 'helper-agent', name: 'Helper', displayName: 'Helper', avatarUrl: 'pixel:robot' }], humans: [{ id: 'test-human', name: 'tester', displayName: 'Test user' }, { id: 'teammate', name: 'teammate', displayName: 'Teammate', avatarUrl: '/api/avatars/users/teammate.svg' }] });
@@ -78,6 +80,8 @@ const mock = createServer(async (req, res) => {
   res.statusCode = 404; json({ error: 'missing test route' });
 });
 let seq = 55;
+const logouts = [];
+const serverHeaders = [];
 const uploads = [];
 const threads = new Set();
 // Replies that arrive after a message is already on screen; an `after` read alone never returns them.
@@ -355,6 +359,39 @@ const lift = await page.evaluate(() => {
 });
 assert.ok(Math.abs(lift - 300) < 2, `composer lifts by the keyboard height (got ${lift})`);
 console.log('KEYBOARD inset lifts the composer by', lift);
+// Settings: account section shows the endpoint and server, switches server and signs out. The settings modal opens in
+// Obsidian's active document, which earlier steps may have moved, so its controls are driven through its own element.
+const settings = (fn, arg) => page.evaluate(([source, value]) => {
+  const tab = globalThis.app.setting.activeTab.containerEl;
+  return new Function('tab', 'value', source)(tab, value);
+}, [fn, arg]);
+const waitSettings = (source, timeout = 10000) => page.waitForFunction(new Function(`const tab = globalThis.app.setting.activeTab?.containerEl; return !!tab && (${source});`), null, { timeout });
+await page.evaluate(() => { const s = globalThis.app.setting; s.open(); s.openTabById('raft-page'); });
+await waitSettings("!!tab.querySelector('.raft-account-server select') && !tab.querySelector('.raft-account-server select').disabled");
+const accountText = await settings("return tab.innerText;");
+assert.ok(accountText.includes('http://127.0.0.1:4488'), 'endpoint shown');
+assert.ok(accountText.includes('Plugin test · /plugin-test') && accountText.includes('Test user'), 'server and user shown');
+const chooseServer = id => settings("const select = tab.querySelector('.raft-account-server select'); select.value = value; select.dispatchEvent(new Event('change'));", id);
+await chooseServer('other-server');
+await page.waitForFunction(() => globalThis.app.plugins.plugins['raft-page'].session?.serverId === 'other-server', null, { timeout: 10000 });
+assert.equal(await page.evaluate(() => globalThis.app.plugins.plugins['raft-page'].settings.serverSlug), 'other');
+serverHeaders.length = 0;
+await page.evaluate(() => globalThis.app.workspace.getLeavesOfType('raft-page')[0].view.reload());
+assert.ok(serverHeaders.includes('other-server') && !serverHeaders.includes('test-server'), 'requests after the switch carry the new server');
+await waitSettings("tab.innerText.includes('Other · /other') && !tab.querySelector('.raft-account-server select').disabled");
+await chooseServer('test-server');
+await page.waitForFunction(() => globalThis.app.plugins.plugins['raft-page'].session?.serverId === 'test-server', null, { timeout: 10000 });
+console.log('SETTINGS account shows endpoint, server and user; switch to another server and back verified');
+await waitSettings("[...tab.querySelectorAll('button')].some(b => b.textContent === 'Sign out')");
+await settings("[...tab.querySelectorAll('button')].find(b => b.textContent === 'Sign out').click();");
+await page.waitForFunction(() => !globalThis.app.plugins.plugins['raft-page'].session, null, { timeout: 10000 });
+await waitSettings("tab.innerText.includes('Not signed in')");
+await page.evaluate(() => globalThis.app.setting.close());
+await page.locator('.raft-login-form').waitFor({ timeout: 10000 });
+for (let i = 0; i < 20 && !logouts.length; i++) await page.waitForTimeout(100);
+assert.equal(logouts.length, 1);
+assert.equal(logouts[0].body.refreshToken, 'mock-refresh');
+console.log('SETTINGS sign out revokes the token and the sidebar returns to the login form');
 console.log('OVERFLOW', await page.locator('.raft-view').evaluate(el => ({ width: el.clientWidth, scrollWidth: el.scrollWidth })));
 await app.close();
 child.kill();
