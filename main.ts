@@ -56,6 +56,8 @@ export default class RaftPagePlugin extends Plugin {
   /** Per binding: the hash of each note as last sent to its steward (hashes only, no note text). */
   sentHashes: Record<string, Record<string, string>> = {};
   private answeredNeeds: string[] = [];
+  /** Earlier sync thread → reply count and last reply time when it was last read. */
+  private scannedSyncThreads = new Map<string, string>();
   private answeringNeeds = new Set<string>();
   private needReceipts = new Map<string, string>();
   private syncing = false;
@@ -377,6 +379,7 @@ export default class RaftPagePlugin extends Plugin {
         }
       }
     }
+    if (binding.syncChannelId) await this.ingestOtherSyncReplies(path, binding.syncChannelId, binding.syncRootId, steward.id);
     const page = await this.client.messages(binding.channelId, { limit: 50 });
     through = Math.max(through, lastSyncedThrough(page.messages, path));
     const activity = newActivity(page.messages, page.threadSummariesByParentMessageId, through, { rootId: binding.syncRootId, stewardId: steward.id });
@@ -412,6 +415,30 @@ export default class RaftPagePlugin extends Plugin {
     for (const f of changed) if (uploaded.includes(f.path)) sent[f.path] = f.hash;
     this.sentHashes[path] = sent;
     await this.saveSettings();
+  }
+  /**
+   * A steward may answer in an earlier sync thread for the same note (a new thread starts whenever the steward or the
+   * brief changes) or directly in the direct message. Those replies count too; only the latest page of the direct
+   * message is read, and a thread is read again only when its last reply changes.
+   */
+  private async ingestOtherSyncReplies(path: string, dm: string, currentRoot: string | undefined, stewardId: string) {
+    const page = await this.client.messages(dm, { limit: 50 });
+    const opener = `📝 Document sync for \`${path}\``;
+    for (const message of page.messages) {
+      if (message.senderId === stewardId) this.autoApply({ ...message, channelId: message.channelId ?? dm });
+      const summary = page.threadSummariesByParentMessageId?.[message.id] ?? message.threadSummary;
+      if (message.id === currentRoot || !message.content.startsWith(opener) || !summary?.replyCount) continue;
+      const stamp = `${summary.replyCount}:${summary.lastReplyAt ?? ''}`;
+      if (this.scannedSyncThreads.get(message.id) === stamp) continue;
+      const threadId = await this.threadChannel(dm, message.id);
+      if (!threadId) continue;
+      const replies = (await this.channelHistory(threadId)).map(m => ({ ...m, channelId: threadId }));
+      for (const reply of replies) if (reply.senderId === stewardId) this.autoApply(reply);
+      await this.applying;
+      for (const reply of replies) if (reply.senderId === stewardId) await this.answerNeeds(reply, dm, path);
+      this.scannedSyncThreads.set(message.id, stamp);
+    }
+    await this.applying;
   }
   /** The notes a binding covers, with their current text and hash. */
   private async bindingFiles(path: string, binding: { kind: 'file' | 'folder' }) {

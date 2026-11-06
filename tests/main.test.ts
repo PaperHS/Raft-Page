@@ -776,3 +776,23 @@ test('a read request answered by another device or sign-in is not answered again
   // A marker for a different request does not count.
   assert.equal((await answered([{ id: 'r', seq: 5, senderId: 'other-user', content: "[raft-need]: <> 'need-0'" }])).sends.length, 1);
 });
+
+test('a steward edit posted in an earlier sync thread for the same note is still applied, and read once', async () => {
+  const f = await readFixture();
+  Object.assign(f.plugin.bindings.Notes, { syncChannelId: 'dm', syncRootId: 'new-root', syncBrief: 5 });
+  const edit = '```raft-edit\n' + JSON.stringify({ path: f.file.path, baseHash: await hashText('original'), content: 'updated by steward' }) + '\n```';
+  const oldRoot = { id: 'old-root', seq: 1, channelId: 'dm', senderId: 'alice', content: '📝 Document sync for `Notes` (#a) · steward @steward',
+    createdAt: new Date().toISOString(), threadSummary: { replyCount: 1, lastReplyAt: '2026-11-06T13:38:00Z' } };
+  const otherNote = { ...oldRoot, id: 'other-root', content: '📝 Document sync for `Elsewhere` (#b) · steward @steward' };
+  const reads: string[] = [];
+  f.plugin.client.threadChannel = async (_dm: string, root: string) => { reads.push(root); return `${root}-thread`; };
+  f.plugin.client.messages = async (channel: string) => ({ hasMore: false, messages: channel === 'dm' ? [oldRoot, otherNote]
+    : channel === 'old-root-thread' ? [{ id: 'reply', seq: 2, channelId: channel, senderId: 'steward', senderType: 'agent', senderName: 'steward',
+      content: edit, createdAt: new Date().toISOString() }] : [] });
+  await f.plugin.syncTick();
+  assert.equal(f.disk.get(f.file), 'updated by steward');
+  assert.ok(!reads.includes('other-root'), 'sync threads for other notes are not read');
+  const before = reads.filter(r => r === 'old-root').length;
+  await f.plugin.syncTick();
+  assert.equal(reads.filter(r => r === 'old-root').length, before, 'an unchanged earlier thread is not read again');
+});
