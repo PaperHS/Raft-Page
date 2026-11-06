@@ -22,6 +22,8 @@ export class RaftView extends ItemView {
   private sending = false;
   private authenticating = false;
   private catalogLoading = false;
+  private catalogRefreshing = false;
+  private catalogAt = 0;
   private olderLoading = false;
   private hasMore = false;
   private historyLimited = false;
@@ -357,6 +359,7 @@ export class RaftView extends ItemView {
     this.timer = this.containerEl.ownerDocument.defaultView?.setTimeout(() => {
       this.timer = undefined;
       if (!this.isActive() || !this.plugin.session) return;
+      if (Date.now() - this.catalogAt > 120_000) void this.refreshCatalog();
       void this.loadHistory().finally(() => this.schedulePoll());
     }, POLL_MS);
   }
@@ -449,6 +452,7 @@ export class RaftView extends ItemView {
     this.bindingSource = titleBox.createDiv({ cls: 'raft-binding-source' });
     this.channelSelect.setAttribute('aria-label', 'Channel');
     this.channelSelect.addEventListener('change', () => { void this.changeChannel(this.channelSelect.value); });
+    for (const event of ['focus', 'pointerdown']) this.channelSelect.addEventListener(event, () => { void this.refreshCatalog(); });
     this.threadTitle = titleBox.createDiv({ cls: 'raft-thread-heading' });
     this.threadTitle.hidden = true;
     this.status = titleBox.createDiv({ cls: 'raft-status', attr: { role: 'status', 'aria-live': 'polite' } });
@@ -460,7 +464,7 @@ export class RaftView extends ItemView {
     setIcon(this.bindButton, 'link');
     this.bindButton.addEventListener('click', event => this.openBindMenu(event));
     this.refreshButton = this.iconButton(actions, 'Refresh', 'refresh-cw', () => {
-      void this.plugin.loadBindings().then(() => { this.updateContext(); this.followNote(); return this.refresh(); });
+      void this.plugin.loadBindings().then(async () => { await this.refreshCatalog(true); this.updateContext(); this.followNote(); return this.refresh(); });
     });
     this.signOutButton = this.iconButton(actions, 'Sign out', 'log-out', () => { void this.signOut(); });
     this.alert = this.root.createDiv({ cls: 'raft-error raft-conversation-error', attr: { role: 'alert' } });
@@ -608,6 +612,7 @@ export class RaftView extends ItemView {
     try {
       const channels = await this.plugin.client.channels();
       if (!this.isCurrent(token)) return;
+      this.catalogAt = Date.now();
       this.channels = channels;
       this.channelSelect.empty();
       if (!channels.length) this.channelSelect.createEl('option', { value: '', text: 'No channels available' });
@@ -626,6 +631,36 @@ export class RaftView extends ItemView {
     } finally {
       if (this.isCurrent(token)) { this.catalogLoading = false; this.updateControls(); }
     }
+  }
+
+  /**
+   * Picks up channels created, joined or renamed since the list was loaded, without disturbing the open conversation.
+   * Runs from Refresh, when the channel menu is opened, and now and then while polling.
+   */
+  private async refreshCatalog(force = false): Promise<void> {
+    const now = Date.now();
+    if (!this.plugin.session || this.catalogLoading || this.catalogRefreshing || (!force && now - this.catalogAt < 10_000)) return;
+    const token = this.epoch;
+    this.catalogRefreshing = true;
+    try {
+      const channels = await this.plugin.client.channels();
+      if (!this.isCurrent(token)) return;
+      this.catalogAt = Date.now();
+      const same = channels.length === this.channels.length && channels.every((c, i) => c.id === this.channels[i].id && c.name === this.channels[i].name);
+      if (same) return;
+      const current = this.plugin.settings.channelId;
+      this.channels = channels;
+      this.channelSelect.empty();
+      if (!channels.length) this.channelSelect.createEl('option', { value: '', text: 'No channels available' });
+      for (const channel of channels) this.channelSelect.createEl('option', { value: channel.id, text: channel.name });
+      if (channels.some(c => c.id === current)) {
+        this.channelSelect.value = current;
+        this.updateContext();
+        this.updateControls();
+      } else if (channels[0]) await this.changeChannel(channels[0].id);
+      else this.updateControls();
+    } catch { /* The current list stays usable; the next refresh tries again. */ }
+    finally { this.catalogRefreshing = false; }
   }
 
   private async loadMembers(token: number): Promise<void> {

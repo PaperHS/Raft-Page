@@ -33,7 +33,7 @@ const mock = createServer(async (req, res) => {
   if (url.pathname === '/api/auth/logout') { logouts.push({ body, auth: req.headers.authorization }); return json({ ok: true }); }
   serverHeaders.push(req.headers['x-server-id']);
   if (url.pathname === '/api/auth/login') return json({ user: { id: 'test-human', name: 'Test user' }, accessToken: 'mock-access', refreshToken: 'mock-refresh' });
-  if (url.pathname === '/api/channels') return json([{ id: 'test-channel', name: 'Plugin test', joined: true, type: 'channel' }, { id: 'second-channel', name: 'Second', joined: true, type: 'channel' }]);
+  if (url.pathname === '/api/channels') return json([{ id: 'test-channel', name: 'Plugin test', joined: true, type: 'channel' }, { id: 'second-channel', name: 'Second', joined: true, type: 'channel' }, ...extraChannels]);
   if (url.pathname.endsWith('/members')) return json({ agents: [{ id: 'test-agent', name: 'TestAgent', displayName: 'Test Agent', avatarUrl: 'pixel:random:test-agent', activity: 'online' }, { id: 'helper-agent', name: 'Helper', displayName: 'Helper', avatarUrl: 'pixel:robot' }], humans: [{ id: 'test-human', name: 'tester', displayName: 'Test user' }, { id: 'teammate', name: 'teammate', displayName: 'Teammate', avatarUrl: '/api/avatars/users/teammate.svg' }] });
   if (url.pathname === '/api/attachments/urls') return json({ urls: body.attachmentIds.map(id => ({ id, url: `/files/${id}.svg` })) });
   if (req.method === 'POST' && url.pathname === '/api/channels/dm') return json({ id: `dm-${body.agentId}`, type: 'dm' });
@@ -81,6 +81,7 @@ const mock = createServer(async (req, res) => {
 });
 let seq = 55;
 const logouts = [];
+const extraChannels = [];
 const serverHeaders = [];
 const uploads = [];
 const threads = new Set();
@@ -359,6 +360,13 @@ const lift = await page.evaluate(() => {
 });
 assert.ok(Math.abs(lift - 300) < 2, `composer lifts by the keyboard height (got ${lift})`);
 console.log('KEYBOARD inset lifts the composer by', lift);
+// A channel created after the pane loaded shows up after Refresh, without restarting the plugin.
+extraChannels.push({ id: 'new-channel', name: 'Created later', joined: true, type: 'channel' });
+const before = await page.locator('.raft-channel-select').inputValue();
+await page.locator('.raft-header-actions [aria-label="Refresh"]').click();
+await page.locator('.raft-channel-select option[value="new-channel"]').waitFor({ state: 'attached', timeout: 10000 });
+assert.equal(await page.locator('.raft-channel-select').inputValue(), before, 'refresh keeps the open channel');
+console.log('NEW CHANNEL appears after Refresh; open channel kept');
 // Settings: account section shows the endpoint and server, switches server and signs out. The settings modal opens in
 // Obsidian's active document, which earlier steps may have moved, so its controls are driven through its own element.
 const settings = (fn, arg) => page.evaluate(([source, value]) => {
