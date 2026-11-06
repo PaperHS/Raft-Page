@@ -119,6 +119,145 @@ async function fixture(open = true) {
   return { plugin, app, file, files, disk, view, leaves, writes, proposal, secrets, vaultEvents };
 }
 
+async function readFixture(open = false) {
+  const f = await fixture(open);
+  f.plugin.bindings = { Notes: { channelId: 'channel-a', channelName: 'a', serverId: 'server-a', kind: 'folder', stewardId: 'steward', stewardName: 'steward' } };
+  const uploads: any[][] = [], sends: any[][] = [];
+  f.plugin.client.uploadText = async (...args: any[]) => { uploads.push(args); return 'attachment-1'; };
+  f.plugin.client.send = async (...args: any[]) => { sends.push(args); return { id: 'receipt' }; };
+  f.plugin.client.ensureThread = async () => 'request-thread';
+  const request = (paths = [f.file.path], extra: any = {}) => ({ id: 'need-1', seq: 1, channelId: 'channel-a', senderId: 'steward',
+    senderType: 'agent', senderName: 'steward', createdAt: new Date().toISOString(),
+    content: '```raft-need\n' + JSON.stringify({ paths }) + '\n```', ...extra });
+  return { ...f, uploads, sends, request };
+}
+
+test('channel read requests use current editor text and reply in a thread without automatic edits enabled', async () => {
+  const f = await readFixture(true);
+  f.plugin.settings.autoApply = false;
+  f.plugin.settings.channelId = 'unrelated-channel';
+  f.view.editor.setValue('current unsaved text');
+  f.plugin.client.messages = async () => ({ messages: [f.request()], hasMore: false });
+  await f.plugin.syncTick();
+  assert.deepEqual(f.uploads, [['request-thread', 'Original.md', 'current unsaved text']]);
+  assert.equal(f.sends[0][0], 'request-thread');
+  assert.match(f.sends[0][1], new RegExp(await hashText('current unsaved text')));
+  assert.deepEqual(f.sends[0][3], ['attachment-1']);
+  assert.equal(f.disk.get(f.file), 'original');
+  assert.deepEqual(f.writes, []);
+  await f.plugin.syncTick();
+  assert.equal(f.sends.length, 1, 'a completed request does not upload or reply twice');
+});
+
+test('read requests under ordinary roots work without opening the thread and keep replies in that thread', async () => {
+  const f = await readFixture();
+  f.plugin.settings.autoApply = false;
+  const root = { id: 'ordinary-root', seq: 1, senderName: 'helper', content: 'Discuss the plan', threadSummary: { replyCount: 1 } };
+  f.plugin.client.threadChannel = async () => 'ordinary-thread';
+  f.plugin.client.ensureThread = async () => { throw new Error('must not create a nested thread'); };
+  f.plugin.client.messages = async (channel: string) => ({ messages: channel === 'channel-a' ? [root]
+    : [f.request(undefined, { channelId: undefined })], hasMore: false });
+  await f.plugin.syncTick();
+  assert.equal(f.uploads[0][0], 'ordinary-thread');
+  assert.equal(f.sends[0][0], 'ordinary-thread');
+  await f.plugin.syncTick();
+  assert.equal(f.sends.length, 1);
+});
+
+test('existing sync-DM reads still return full hashes and file attachments', async () => {
+  const f = await readFixture();
+  Object.assign(f.plugin.bindings.Notes, { syncChannelId: 'dm', syncRootId: 'sync-root' });
+  f.plugin.client.threadChannel = async () => 'sync-thread';
+  f.plugin.client.messages = async (channel: string) => ({ messages: channel === 'sync-thread'
+    ? [f.request(undefined, { channelId: 'sync-thread' })] : [], hasMore: false });
+  await f.plugin.syncTick();
+  assert.deepEqual(f.uploads, [['sync-thread', 'Original.md', 'original']]);
+  assert.match(f.sends[0][1], new RegExp(await hashText('original')));
+});
+
+for (const denied of ['other-agent', 'other-server', 'paused', 'other-channel', 'other-sync-binding']) {
+  test(`read requests disclose no note when ${denied}`, async () => {
+    const f = await readFixture();
+    const request = f.request(undefined, { senderId: denied === 'other-agent' ? 'helper' : 'steward' });
+    if (denied === 'other-server') f.plugin.bindings.Notes.serverId = 'another';
+    if (denied === 'paused') f.plugin.bindings.Notes.paused = true;
+    if (denied === 'other-channel') request.channelId = 'channel-b';
+    await f.plugin.answerNeeds(request, denied === 'other-channel' ? 'channel-b' : 'channel-a', denied === 'other-sync-binding' ? 'Other' : undefined);
+    assert.deepEqual(f.uploads, []);
+    assert.deepEqual(f.sends, []);
+  });
+}
+
+test('read scope follows the nearest binding and reports missing or invalid paths without reading them', async () => {
+  const f = await readFixture();
+  f.plugin.bindings['Notes/Private'] = { ...f.plugin.bindings.Notes, channelId: 'private', stewardId: 'someone-else' };
+  await f.plugin.answerNeeds(f.request(['../secret.md', '/tmp/secret.md', 'Notes/Private/x.md', 'Notes/Missing.md', 'Other.md']), 'channel-a');
+  assert.deepEqual(f.uploads, []);
+  assert.match(f.sends[0][1], /note not found in this binding/);
+  assert.match(f.sends[0][1], /not available in this binding/);
+});
+
+test('failed uploads get an accurate receipt and retry until delivery succeeds without repeated warnings', async () => {
+  const f = await readFixture();
+  let fail = true, attempts = 0;
+  f.plugin.client.uploadText = async () => { attempts++; if (fail) throw new Error('offline'); return 'file'; };
+  await f.plugin.answerNeeds(f.request(), 'channel-a');
+  assert.match(f.sends[0][1], /attachment upload failed; the plugin will retry/);
+  assert.doesNotMatch(f.sends[0][1], /not available/);
+  assert.equal(f.plugin.sentHashes.Notes, undefined);
+  await f.plugin.answerNeeds(f.request(), 'channel-a');
+  assert.equal(f.sends.length, 1, 'the same failure receipt is not repeated');
+  fail = false;
+  await f.plugin.answerNeeds(f.request(), 'channel-a');
+  assert.equal(f.sends.length, 2);
+  assert.deepEqual(f.sends[1][3], ['file']);
+  assert.equal(f.plugin.sentHashes.Notes[f.file.path], await hashText('original'));
+  await f.plugin.answerNeeds(f.request(), 'channel-a');
+  assert.equal(attempts, 3);
+});
+
+test('a failed response does not complete a read request, so the next pass retries', async () => {
+  const f = await readFixture();
+  let attempts = 0;
+  f.plugin.client.send = async () => { if (++attempts === 1) throw new Error('response dropped'); return { id: 'ok' }; };
+  await f.plugin.answerNeeds(f.request(), 'channel-a');
+  assert.equal(f.plugin.sentHashes.Notes, undefined);
+  await f.plugin.answerNeeds(f.request(), 'channel-a');
+  assert.equal(attempts, 2);
+  assert.equal(f.plugin.sentHashes.Notes[f.file.path], await hashText('original'));
+});
+
+test('an empty note is represented explicitly with its real hash, without an invalid empty upload', async () => {
+  const f = await readFixture(true);
+  f.view.editor.setValue('');
+  await f.plugin.answerNeeds(f.request(), 'channel-a');
+  assert.deepEqual(f.uploads, []);
+  assert.match(f.sends[0][1], /empty note \(0 bytes\)/);
+  assert.ok(f.sends[0][1].includes(await hashText('')));
+});
+
+for (const change of ['account', 'unbind', 'pause', 'unload']) {
+  test(`a read is not sent if ${change} occurs during its upload`, async () => {
+    const f = await readFixture();
+    f.plugin.client.uploadText = async () => {
+      if (change === 'account') f.plugin.session = { ...session(), userId: 'bob' };
+      if (change === 'unbind') f.plugin.bindings = {};
+      if (change === 'pause') f.plugin.bindings.Notes.paused = true;
+      if (change === 'unload') f.plugin.onunload();
+      return 'attachment';
+    };
+    await f.plugin.answerNeeds(f.request(), 'channel-a');
+    assert.deepEqual(f.sends, []);
+  });
+}
+
+test('changing the steward resets delivered hashes so a new steward receives the current note', async () => {
+  const f = await readFixture();
+  f.plugin.sentHashes.Notes = { [f.file.path]: 'already-sent-to-old-steward' };
+  await f.plugin.setSteward('Notes', { id: 'new', name: 'new' });
+  assert.equal(f.plugin.sentHashes.Notes, undefined);
+});
+
 async function duringHash(f: Awaited<ReturnType<typeof fixture>>, mutate: () => void | Promise<void>) {
   const entered = deferred(), resume = deferred();
   setHashHook(async () => { entered.resolve(); await resume.promise; });

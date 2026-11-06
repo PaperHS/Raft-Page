@@ -53,6 +53,8 @@ export default class RaftPagePlugin extends Plugin {
   /** Per binding: the hash of each note as last sent to its steward (hashes only, no note text). */
   sentHashes: Record<string, Record<string, string>> = {};
   private answeredNeeds: string[] = [];
+  private answeringNeeds = new Set<string>();
+  private needReceipts = new Map<string, string>();
   private syncing = false;
   bindings: Bindings = {};
   /** Live agent activity from Raft's `agent:activity` events, by agent id. */
@@ -281,7 +283,11 @@ export default class RaftPagePlugin extends Plugin {
     if (agent) Object.assign(next, { stewardId: agent.id, stewardName: agent.name, stewardSince: new Date().toISOString(), paused: undefined });
     else { delete next.stewardId; delete next.stewardName; delete next.stewardSince; }
     // The sync thread opens with instructions addressed to its steward, so a new steward gets a new thread.
-    if (agent?.id !== binding.stewardId) { delete next.syncRootId; delete next.syncBrief; delete next.syncChannelId; }
+    if (agent?.id !== binding.stewardId) {
+      delete next.syncRootId; delete next.syncBrief; delete next.syncChannelId;
+      delete this.sentHashes[path];
+      await this.saveSettings();
+    }
     await this.saveBindings({ ...this.bindings, [path]: next });
     new Notice(agent ? `@${agent.name} now keeps ${path} up to date from #${binding.channelName}.` : `Automatic updates for ${path} are off.`);
   }
@@ -335,12 +341,12 @@ export default class RaftPagePlugin extends Plugin {
     if (binding.syncRootId && binding.syncChannelId) {
       threadId = await this.threadChannel(binding.syncChannelId, binding.syncRootId);
       if (threadId) {
-        const replies = (await this.client.messages(threadId, { limit: 50 })).messages.map(m => ({ ...m, channelId: m.channelId ?? threadId! }));
+        const replies = (await this.channelHistory(threadId)).map(m => ({ ...m, channelId: threadId! }));
         through = Math.max(through, lastSyncedThrough(replies, path));
-        for (const reply of replies) {
-          if (reply.senderId !== steward.id) continue;
-          this.autoApply(reply);
-          await this.answerNeeds(path, binding, reply);
+        for (const reply of replies) if (reply.senderId === steward.id) this.autoApply(reply);
+        await this.applying;
+        for (const reply of replies) if (reply.senderId === steward.id) {
+          await this.answerNeeds(reply, binding.syncChannelId, path);
         }
       }
     }
@@ -356,6 +362,9 @@ export default class RaftPagePlugin extends Plugin {
       const dm = await this.client.openDm(steward.id);
       const root = await this.client.send(dm, syncRootMessage(path, steward.name, binding.channelName));
       binding = { ...binding, syncChannelId: dm, syncRootId: root.id, syncBrief: BRIEF_VERSION };
+      // A new conversation has no attachment history, even if a previous thread received the same version.
+      delete this.sentHashes[path];
+      await this.saveSettings();
       await this.saveBindings({ ...this.bindings, [path]: binding });
     }
     const files = await this.bindingFiles(path, binding);
@@ -395,22 +404,95 @@ export default class RaftPagePlugin extends Plugin {
     }
     return { ids, paths };
   }
-  /** Sends the notes a steward asked for, once per request, if they are inside its binding. */
-  private async answerNeeds(path: string, binding: { channelId: string; syncChannelId?: string; syncRootId?: string; stewardName?: string; kind: 'file' | 'folder' }, message: Message) {
-    const wanted = parseNeeds(message.content);
-    if (!wanted.length || this.answeredNeeds.includes(message.id) || !binding.syncRootId || !binding.syncChannelId) return;
-    this.answeredNeeds.push(message.id); this.answeredNeeds = this.answeredNeeds.slice(-200);
-    const inside = (await this.bindingFiles(path, binding)).filter(f => wanted.some(w => safeNotePath(w) === f.path));
-    const threadId = await this.client.ensureThread(binding.syncChannelId, binding.syncRootId);
-    const { ids, paths: uploaded } = await this.uploadNotes(threadId, inside.slice(0, 10));
-    const missing = wanted.filter(w => !uploaded.includes(w));
-    const lines = [`@${binding.stewardName} Requested notes (path · sha256):`, ...inside.filter(f => uploaded.includes(f.path)).map(f => `- ${f.path} · ${f.hash}`)];
-    if (missing.length) lines.push(`Not available in this binding: ${missing.join(', ')}`);
-    await this.client.send(threadId, lines.join('\n'), undefined, ids.length ? ids : undefined);
-    const sent = this.sentHashes[path] ?? {};
-    for (const f of inside) if (uploaded.includes(f.path)) sent[f.path] = f.hash;
-    this.sentHashes[path] = sent;
-    await this.saveSettings();
+  /**
+   * Answers the steward in the conversation where it asked: ordinary channel requests get a reply thread, while
+   * existing threads (including the sync DM thread) keep the reply there. Never uses guessed filesystem paths.
+   */
+  private async answerNeeds(message: Message, parentChannelId: string, syncPath?: string) {
+    if (!this.session || !message.senderId || !message.channelId || !/^```raft-need\s*\r?\n/m.test(message.content)) return;
+    const generation = this.generation, identity = this.identity(this.session), serverId = this.session.serverId;
+    const eligible = () => Object.entries(this.bindings).filter(([path, b]) => b.serverId === serverId &&
+      b.stewardId === message.senderId && !b.paused && (syncPath === undefined ? b.channelId === parentChannelId
+        : path === syncPath && b.syncChannelId === parentChannelId));
+    const bindings = eligible();
+    if (!bindings.length || !this.inBindingChannel(parentChannelId, message.channelId)) return;
+    const policy = () => JSON.stringify(eligible().map(([path, b]) => [path, b.channelId, b.syncChannelId, b.stewardId]));
+    const originalPolicy = policy();
+    const assertCurrent = () => {
+      this.assertSession(generation, identity);
+      if (policy() !== originalPolicy) throw new Error('The document binding changed while reading.');
+    };
+    const key = JSON.stringify([identity, parentChannelId, message.channelId, message.id, syncPath ?? null]);
+    // Old versions recorded only the message ID for sync requests. Respect those receipts after an upgrade.
+    if (this.answeredNeeds.includes(key) || (syncPath !== undefined && this.answeredNeeds.includes(message.id)) || this.answeringNeeds.has(key)) return;
+    this.answeringNeeds.add(key);
+    try {
+      const paths = [...new Set(parseNeeds(message.content))];
+      let complete = true;
+      const lines = [`@${message.senderName} Requested notes (path · sha256):`];
+      const attachments: string[] = [];
+      const delivered: { binding: string; path: string; hash: string }[] = [];
+      const target = message.channelId === parentChannelId ? await this.client.ensureThread(parentChannelId, message.id) : message.channelId;
+      assertCurrent();
+      this.threadParents.set(target, parentChannelId);
+      if (!paths.length) lines.push('Invalid raft-need request. Use {"paths":["folder/note.md"]} with vault-relative Markdown paths.');
+      for (const [index, requested] of paths.entries()) {
+        const path = safeNotePath(requested);
+        const resolved = path ? resolveBinding(this.bindings, path, serverId) : null;
+        if (!path || !resolved || !bindings.some(([root]) => root === resolved.path)) {
+          lines.push(`- ${requested}: not available in this binding.`); continue;
+        }
+        if (index >= 10) { lines.push(`- ${path}: request limit reached; ask for this note in a separate request.`); continue; }
+        let text: string | null;
+        try { text = await this.currentText(path); }
+        catch { assertCurrent(); complete = false; lines.push(`- ${path}: read failed; the plugin will retry.`); continue; }
+        assertCurrent();
+        if (text === null) { lines.push(`- ${path}: note not found in this binding.`); continue; }
+        const hash = await hashText(text);
+        assertCurrent();
+        // Raft rejects empty uploads. This receipt is an unambiguous representation of an empty note.
+        if (text === '') {
+          lines.push(`- ${path} · ${hash} · empty note (0 bytes).`);
+          delivered.push({ binding: resolved.path, path, hash });
+          continue;
+        }
+        try {
+          const id = await this.client.uploadText(target, path.split('/').pop() || 'note.md', text);
+          assertCurrent();
+          attachments.push(id);
+          delivered.push({ binding: resolved.path, path, hash });
+          lines.push(`- ${path} · ${hash} · attached.`);
+        } catch (cause) {
+          assertCurrent();
+          if (cause instanceof RaftClientError && (cause.status === 401 || cause.status === 403)) throw cause;
+          complete = false;
+          lines.push(`- ${path}: attachment upload failed; the plugin will retry.`);
+        }
+      }
+      const content = lines.join('\n');
+      // A repeated failure gets one receipt, not another warning every 30 seconds. A successful retry always sends.
+      if (this.needReceipts.get(key) !== content || complete) {
+        assertCurrent();
+        await this.client.send(target, content, undefined, attachments.length ? attachments : undefined);
+        assertCurrent();
+        this.needReceipts.set(key, content);
+        for (const note of delivered) {
+          (this.sentHashes[note.binding] ??= {})[note.path] = note.hash;
+        }
+      }
+      // Completion is recorded only after the response is acknowledged; transport failures remain retryable.
+      if (complete) {
+        this.answeredNeeds.push(key); this.answeredNeeds = this.answeredNeeds.slice(-200);
+        this.needReceipts.delete(key);
+      }
+      await this.saveSettings();
+    } catch {
+      // A dropped response must not mark the request answered. The next background pass will retry it.
+      if (this.active && generation === this.generation && identity === this.identity(this.session) && !this.needReceipts.has(key)) {
+        new Notice('Raft: a document read could not be delivered. The plugin will retry.');
+        this.needReceipts.set(key, 'delivery-failed');
+      }
+    } finally { this.answeringNeeds.delete(key); }
   }
 
   private activeNote(): TFile | null {
@@ -575,7 +657,10 @@ export default class RaftPagePlugin extends Plugin {
     }
     // A reply under an old root can depend on a later top-level edit. Order edits by their own sequence,
     // never by the position of their root in the channel.
-    for (const message of received.sort((a, b) => this.compareMessages(a, b))) this.autoApply(message);
+    const ordered = received.sort((a, b) => this.compareMessages(a, b));
+    for (const message of ordered) this.autoApply(message);
+    await this.applying;
+    for (const message of ordered) await this.answerNeeds(message, channelId);
   }
   /** History is oldest first before application, so dependent edits land in the order they were sent. */
   private async channelHistory(channelId: string): Promise<Message[]> {
@@ -605,11 +690,11 @@ export default class RaftPagePlugin extends Plugin {
   /** Reads ordinary threads as well as threads attached to note sends, even when their root was posted by an agent. */
   async scanThread(parentChannelId: string, root: Message, receive: (message: Message) => void = message => this.autoApply(message)): Promise<void> {
     const summary = root.threadSummary;
-    if (!this.settings.autoApply || !summary?.replyCount || !this.session) return;
+    if (!summary?.replyCount || !this.session) return;
     const bound = Object.values(this.bindings).some(b => b.serverId === this.session!.serverId &&
       b.channelId === parentChannelId && b.stewardId && !b.paused);
     const documentId = sentDocumentId(root.content);
-    if (!bound && (root.senderId !== this.session.userId || !documentId || !this.snapshots[documentId])) return;
+    if (!bound && (!this.settings.autoApply || root.senderId !== this.session.userId || !documentId || !this.snapshots[documentId])) return;
     const generation = this.generation, identity = this.identity(this.session);
     const policy = JSON.stringify([this.settings.autoApply, Object.entries(this.bindings)
       .filter(([, b]) => b.serverId === this.session!.serverId && b.channelId === parentChannelId)

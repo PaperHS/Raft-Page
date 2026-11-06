@@ -11,7 +11,7 @@ const NEED_BLOCK = /^```raft-need\s*\r?\n([\s\S]*?)^```\s*$/gm;
 export const BIND_NOTICE = '📁 This channel is now bound to the Obsidian';
 
 /** Bumped when the brief changes, so bindings start a fresh sync thread that carries the new one. */
-export const BRIEF_VERSION = 4;
+export const BRIEF_VERSION = 5;
 
 /**
  * The steward's instructions. They open the sync thread, and Raft shows a thread's first message with every reply it
@@ -20,7 +20,7 @@ export const BRIEF_VERSION = 4;
 export function syncRootMessage(binding: string, steward: string, channel: string): string {
   return [
     `📝 Document sync for \`${binding}\` (#${channel}) · steward @${steward}`,
-    `@${steward}: in this thread only, keep these notes in step with what #${channel} decides. For each request, read the listed messages and record only decisions, changed requirements, corrections and to-dos (📌 = must record, 🚫 = never). Nothing to record → do not reply. Otherwise reply with one summary line and, per note, a code block fenced as \`\`\`raft-edit (not json) containing \`{"path","baseHash","ops":[…]}\` with ops \`append\`/\`replace_section\` {heading, content} or \`replace\` {find, with}, each matching one place; new note: \`{"path","create":true,"content"}\`. Need a note's text → \`\`\`raft-need block \`{"paths":[…]}\`. When a person asks you elsewhere in #${channel} to write or change these notes, the same blocks work there.`,
+    `@${steward}: keep these notes in step with what #${channel} decides. For each request, read the listed messages and record only decisions, changed requirements, corrections and to-dos (📌 = must record, 🚫 = never). Nothing to record → do not reply. Otherwise reply with one summary line and, per note, a code block fenced as \`\`\`raft-edit (not json) containing \`{"path","baseHash","ops":[…]}\` with ops \`append\`/\`replace_section\` {heading, content} or \`replace\` {find, with}, each matching one place; new note: \`{"path","create":true,"content"}\`. Need a note's text → \`\`\`raft-need block \`{"paths":[…]}\`. Reads and edits work here and in #${channel} or its threads; read replies stay in a thread. Before discussing or editing, obtain current text and hash from attachments or raft-need. Missing or stale cache → request again before asking the user to re-upload; never guess contents or hashes. Paths are vault-relative, not local filesystem paths. Confirm the response before claiming success.`,
   ].join('\n');
 }
 

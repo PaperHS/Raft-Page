@@ -37,8 +37,9 @@ test('requests carry a marker any device can read back, and steward file request
 test('the sync thread opens with the steward brief addressed to the steward', () => {
   const root = syncRootMessage('product', 'scribe', 'plan');
   assert.ok(root.startsWith('📝 Document sync for `product` (#plan) · steward @scribe'));
-  for (const part of ['do not reply', 'replace_section', 'raft-need', 'baseHash', 'in this thread only']) assert.ok(root.includes(part), part);
-  assert.ok(root.split('\n').length === 2 && root.length < 800, 'kept short: it is shown with every request and in the channel');
+  for (const part of ['do not reply', 'replace_section', 'raft-need', 'baseHash', 'vault-relative', 'Missing or stale cache', 'Confirm the response']) assert.ok(root.includes(part), part);
+  assert.ok(root.includes('Reads and edits work here and in #plan or its threads'));
+  assert.ok(root.split('\n').length === 2 && root.length < 1400, 'kept short: it is shown with every request');
 });
 
 test('sync openers and requests, even ones posted in the channel by older versions, are not conversation', () => {
