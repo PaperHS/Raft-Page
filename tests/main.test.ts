@@ -127,6 +127,8 @@ async function readFixture(open = false) {
   f.plugin.client.uploadText = async (...args: any[]) => { uploads.push(args); return 'attachment-1'; };
   f.plugin.client.send = async (...args: any[]) => { sends.push(args); return { id: 'receipt' }; };
   f.plugin.client.ensureThread = async () => 'request-thread';
+  // The reply conversation holds what this plugin already posted there.
+  f.plugin.client.messages = async () => ({ messages: sends.map((args, i) => ({ id: `posted-${i}`, seq: 100 + i, channelId: args[0], senderId: 'alice', content: args[1] })) });
   const request = (paths = [f.file.path], extra: any = {}) => ({ id: 'need-1', seq: 1, channelId: 'channel-a', senderId: 'steward',
     senderType: 'agent', senderName: 'steward', createdAt: new Date().toISOString(),
     content: '```raft-need\n' + JSON.stringify({ paths }) + '\n```', ...extra });
@@ -752,4 +754,25 @@ test('sign out revokes the old refresh token after clearing the local session', 
   assert.equal(f.plugin.client.revoked?.[0]?.refreshToken, 'refresh-secret');
   await f.plugin.signOut();
   assert.equal(f.plugin.client.revoked.length, 1, 'nothing to revoke when already signed out');
+});
+
+test('a read request answered by another device or sign-in is not answered again', async () => {
+  const replies = (thread: any[]) => async (channelId: string) => ({ messages: channelId === 'request-thread' ? thread : [], hasMore: false });
+  const answered = async (thread: any[]) => {
+    const f = await readFixture();
+    const request = f.request();
+    f.plugin.client.messages = async (channelId: string) => channelId === 'channel-a' ? { messages: [request], hasMore: false } : replies(thread)(channelId);
+    await f.plugin.syncTick();
+    return f;
+  };
+  // Another device posted a complete receipt carrying the marker.
+  assert.equal((await answered([{ id: 'r', seq: 5, senderId: 'other-user', content: "@steward Requested notes\n\n[raft-need]: <> 'need-1'" }])).sends.length, 0);
+  // A receipt from a version before the marker, by this account, for this sender.
+  assert.equal((await answered([{ id: 'r', seq: 5, senderId: 'alice', content: '@steward Requested notes (path · sha256):\n- Notes/Original.md · abc · attached.' }])).sends.length, 0);
+  // A failed receipt still gets a complete answer, and that answer carries the marker for every device.
+  const retried = await answered([{ id: 'r', seq: 5, senderId: 'alice', content: '@steward Requested notes (path · sha256):\n- Notes/Original.md: read failed; the plugin will retry.' }]);
+  assert.equal(retried.sends.length, 1);
+  assert.ok(retried.sends[0][1].endsWith("\n\n[raft-need]: <> 'need-1'"));
+  // A marker for a different request does not count.
+  assert.equal((await answered([{ id: 'r', seq: 5, senderId: 'other-user', content: "[raft-need]: <> 'need-0'" }])).sends.length, 1);
 });

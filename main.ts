@@ -26,6 +26,9 @@ const DEFAULTS: Settings = {
 type UndoEntry = { id: string; path: string; before: string | null; after: string; senderName: string; at: number };
 type Snapshot = Omit<DocumentSnapshot, 'content'> & { userId: string; apiUrl: string; serverId: string; threadChannels: string[] };
 
+/** A Markdown link reference definition: Raft does not render it, but every device can find it. */
+const needMarker = (requestId: string) => `\n\n[raft-need]: <> '${requestId}'`;
+
 export default class RaftPagePlugin extends Plugin {
   settings: Settings = { ...DEFAULTS };
   session?: Session;
@@ -459,6 +462,15 @@ export default class RaftPagePlugin extends Plugin {
       const target = message.channelId === parentChannelId ? await this.client.ensureThread(parentChannelId, message.id) : message.channelId;
       assertCurrent();
       this.threadParents.set(target, parentChannelId);
+      // The local record is per device and per sign-in. The conversation itself says whether any device already answered.
+      if (await this.needAnswered(target, message)) {
+        assertCurrent();
+        this.answeredNeeds.push(key); this.answeredNeeds = this.answeredNeeds.slice(-200);
+        this.needReceipts.delete(key);
+        await this.saveSettings();
+        return;
+      }
+      assertCurrent();
       if (!paths.length) lines.push('Invalid raft-need request. Use {"paths":["folder/note.md"]} with vault-relative Markdown paths.');
       for (const [index, requested] of paths.entries()) {
         const path = safeNotePath(requested);
@@ -493,7 +505,8 @@ export default class RaftPagePlugin extends Plugin {
           lines.push(`- ${path}: attachment upload failed; the plugin will retry.`);
         }
       }
-      const content = lines.join('\n');
+      // Only a complete answer carries the hidden marker, so a failed read is still retried by any device.
+      const content = lines.join('\n') + (complete ? needMarker(message.id) : '');
       // A repeated failure gets one receipt, not another warning every 30 seconds. A successful retry always sends.
       if (this.needReceipts.get(key) !== content || complete) {
         assertCurrent();
@@ -685,6 +698,23 @@ export default class RaftPagePlugin extends Plugin {
     for (const message of ordered) this.autoApply(message);
     await this.applying;
     for (const message of ordered) await this.answerNeeds(message, channelId);
+  }
+  /**
+   * Whether a complete answer to this read request is already in the conversation where it would be posted: one
+   * carrying its hidden marker, or, from versions before the marker, this account's receipt for the same sender that
+   * follows the request before that sender's next request and reports no failure.
+   */
+  private async needAnswered(target: string, request: Message): Promise<boolean> {
+    const page = await this.client.messages(target, { limit: 100, ...(request.seq !== undefined && target === request.channelId ? { after: request.seq } : {}) });
+    const later = page.messages.filter(m => m.id !== request.id && (request.seq === undefined || m.seq === undefined || m.seq > request.seq))
+      .sort((a, b) => this.compareMessages(a, b));
+    if (later.some(m => m.content.includes(needMarker(request.id)))) return true;
+    for (const m of later) {
+      if (m.senderId === request.senderId && /^```raft-need\s*\r?\n/m.test(m.content)) return false;
+      if (m.senderId === this.session?.userId && m.content.startsWith(`@${request.senderName} Requested notes`) &&
+        !m.content.includes('[raft-need]: <>') && !/will retry/.test(m.content)) return true;
+    }
+    return false;
   }
   /** History is oldest first before application, so dependent edits land in the order they were sent. */
   private async channelHistory(channelId: string): Promise<Message[]> {
