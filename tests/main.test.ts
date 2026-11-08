@@ -796,3 +796,47 @@ test('a steward edit posted in an earlier sync thread for the same note is still
   await f.plugin.syncTick();
   assert.equal(reads.filter(r => r === 'old-root').length, before, 'an unchanged earlier thread is not read again');
 });
+
+test('replies to a note sent from another device apply here when the note is bound to that conversation', async () => {
+  const { composeMessage } = await import('../src/documents');
+  const sendFrom = (f: any, senderId = 'alice', channelId = 'channel-a') => ({ id: 'send', seq: 1, senderId, senderType: 'user', channelId,
+    createdAt: new Date().toISOString(), content: composeMessage('writer', 'tidy it', { id: 'phone-doc', path: f.file.path, content: 'original', baseHash: f.proposal.baseHash }, true) });
+  const reply = (f: any, extra: any = {}) => ({ id: 'reply', seq: 2, senderId: 'agent-b', senderType: 'agent', senderName: 'writer', channelId: 'channel-a',
+    createdAt: new Date().toISOString(), content: '```raft-edit\n' + JSON.stringify({ documentId: 'phone-doc', baseHash: f.proposal.baseHash, content: 'from phone' }) + '\n```', ...extra });
+  const bound = (f: any) => { f.plugin.snapshots = {}; f.plugin.bindings = { Notes: { channelId: 'channel-a', channelName: 'a', serverId: 'server-a', kind: 'folder' } }; };
+  const store = new Map<string, string>();
+  const adapter = { list: async () => ({ files: [...store.keys()], folders: [] }), read: async (p: string) => store.get(p)!, write: async (p: string, t: string) => { store.set(p, t); },
+    exists: async (p: string) => store.has(p), mkdir: async () => {} };
+
+  let f = await fixture();
+  bound(f);
+  f.plugin.autoApply(sendFrom(f)); f.plugin.autoApply(reply(f));
+  await f.plugin.applying;
+  assert.deepEqual(f.writes, [{ file: f.file, text: 'from phone' }]);
+
+  // Not this account's send, not bound to the conversation, or answered in another channel: no change, no card.
+  for (const [send, setup, extra] of [['bob', bound, {}], ['alice', (f: any) => { f.plugin.snapshots = {}; }, {}], ['alice', bound, { channelId: 'channel-b' }]] as const) {
+    f = await fixture();
+    setup(f);
+    f.plugin.autoApply(sendFrom(f, send)); f.plugin.autoApply(reply(f, extra));
+    await f.plugin.applying;
+    assert.deepEqual(f.writes, []);
+    assert.deepEqual(f.plugin.proposals(reply(f, extra)), []);
+  }
+
+  // Applied on this device: recorded for the other devices. Applied on another device: skipped here.
+  f = await fixture();
+  bound(f); f.app.vault.adapter = adapter; f.app.vault.configDir = '.obsidian';
+  f.plugin.autoApply(sendFrom(f)); f.plugin.autoApply(reply(f));
+  await f.plugin.applying; await new Promise(r => setTimeout(r, 0));
+  const [record] = [...store.keys()];
+  assert.match(record, /^\.obsidian\/plugins\/raft-page\/applied-[a-z0-9-]+\.json$/);
+  assert.deepEqual(JSON.parse(store.get(record)!), ['reply:0']);
+  store.set('.obsidian/plugins/raft-page/applied-other-device.json', store.get(record)!); store.delete(record);
+  f = await fixture();
+  bound(f); f.app.vault.adapter = adapter; f.app.vault.configDir = '.obsidian';
+  await f.plugin.loadSharedApplied();
+  f.plugin.autoApply(sendFrom(f)); f.plugin.autoApply(reply(f));
+  await f.plugin.applying;
+  assert.deepEqual(f.writes, []);
+});

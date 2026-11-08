@@ -5,7 +5,7 @@ import { RaftView, VIEW_TYPE } from './src/view';
 import { BRIEF_VERSION, QUIET_MS, composeSyncRequest, syncRootMessage, lastSyncedThrough, newActivity, parseNeeds } from './src/sync';
 import { safeNotePath } from './src/edits';
 import { BINDINGS_FILE, bind, deleteBindings, folderManifest, parseBindings, renameBindings, resolveBinding, serializeBindings, unbind, type Bindings, type ResolvedBinding } from './src/bindings';
-import { applyProposalText, composeMessage, hashText, parseProposals, sentDocumentId, type DocumentContext, type DocumentSnapshot, type Proposal } from './src/documents';
+import { applyProposalText, composeMessage, hashText, parseProposals, sentDocumentId, sentNote, type DocumentContext, type DocumentSnapshot, type Proposal } from './src/documents';
 
 interface Settings {
   apiUrl: string; serverId: string; serverSlug: string; channelId: string; agent: string;
@@ -25,6 +25,7 @@ const DEFAULTS: Settings = {
 };
 type UndoEntry = { id: string; path: string; before: string | null; after: string; senderName: string; at: number };
 type Snapshot = Omit<DocumentSnapshot, 'content'> & { userId: string; apiUrl: string; serverId: string; threadChannels: string[] };
+type RemoteDoc = { path: string; baseHash: string; channelId: string; createdAt: string; identity: string };
 
 /** A Markdown link reference definition: Raft does not render it, but every device can find it. */
 const needMarker = (requestId: string) => `\n\n[raft-need]: <> '${requestId}'`;
@@ -65,6 +66,14 @@ export default class RaftPagePlugin extends Plugin {
   /** Live agent activity from Raft's `agent:activity` events, by agent id. */
   agentActivity = new Map<string, string>();
   private bindingWrites: Promise<void> = Promise.resolve();
+  /**
+   * Notes this account sent from another device (or an earlier session), read from the send messages themselves, so
+   * replies to them apply on whichever device is open. Keyed by documentId; the base hash still guards every write.
+   */
+  private remoteDocs = new Map<string, RemoteDoc>();
+  /** Changes applied on other devices, read from their applied-<device>.json next to bindings.json. */
+  private sharedApplied = new Set<string>();
+  private deviceId = '';
 
   async onload() {
     this.secretId = `raft-page-${await hashText(this.app.vault.getName()).then(s => s.slice(0, 24))}`;
@@ -76,6 +85,11 @@ export default class RaftPagePlugin extends Plugin {
     this.applied = data.applied || [];
     this.sentHashes = data.sentHashes || {};
     this.answeredNeeds = data.answeredNeeds || [];
+    // The device id lives in this device's local storage, never in synced plugin data.
+    const saved = this.app.loadLocalStorage?.('raft-page-device');
+    this.deviceId = typeof saved === 'string' && /^[a-z0-9-]{8,64}$/.test(saved) ? saved : crypto.randomUUID();
+    if (saved !== this.deviceId) this.app.saveLocalStorage?.('raft-page-device', this.deviceId);
+    await this.loadSharedApplied();
     try {
       const value = this.app.secretStorage?.getSecret(this.secretId);
       if (value) {
@@ -147,6 +161,7 @@ export default class RaftPagePlugin extends Plugin {
   }
   private invalidatePath(path: string) {
     for (const [id, s] of Object.entries(this.snapshots)) if (s.path === path || s.path.startsWith(path + '/')) delete this.snapshots[id];
+    for (const [id, d] of this.remoteDocs) if (d.path === path || d.path.startsWith(path + '/')) this.remoteDocs.delete(id);
     void this.saveSettings();
   }
   onunload() {
@@ -241,7 +256,32 @@ export default class RaftPagePlugin extends Plugin {
   }
   watchChannel(channelId: string) { this.watchedChannels.add(channelId); this.socket?.emit('join:channel', channelId); }
 
-  private bindingsPath() { return `${this.manifest?.dir ?? `${this.app.vault.configDir}/plugins/raft-page`}/${BINDINGS_FILE}`; }
+  private bindingsPath() { return `${this.pluginDir()}/${BINDINGS_FILE}`; }
+  private pluginDir() { return this.manifest?.dir ?? `${this.app.vault.configDir}/plugins/raft-page`; }
+  /** Reads the changes other devices applied; their files sync with the vault like bindings.json. */
+  async loadSharedApplied() {
+    const adapter = this.app.vault.adapter, own = `applied-${this.deviceId}.json`;
+    if (!adapter) return;
+    try {
+      const listing = await adapter.list(this.pluginDir());
+      const next = new Set<string>();
+      for (const file of listing.files) {
+        const name = file.split('/').pop() ?? '';
+        if (!/^applied-[a-z0-9-]+\.json$/.test(name) || name === own) continue;
+        try {
+          const ids: unknown = JSON.parse(await adapter.read(file));
+          if (Array.isArray(ids)) for (const id of ids) if (typeof id === 'string') next.add(id);
+        } catch { /* A half-synced file is read again next time. */ }
+      }
+      this.sharedApplied = next;
+    } catch { /* No plugin folder yet. */ }
+  }
+  private async saveSharedApplied() {
+    const adapter = this.app.vault.adapter;
+    if (!adapter) return;
+    try { await adapter.write(`${this.pluginDir()}/applied-${this.deviceId}.json`, JSON.stringify(this.applied)); }
+    catch { /* The base hash still refuses a second apply on another device. */ }
+  }
   /** Also called on refresh, so bindings made on another device show up without restarting Obsidian. */
   async loadBindings() {
     const adapter = this.app.vault.adapter, path = this.bindingsPath();
@@ -340,6 +380,7 @@ export default class RaftPagePlugin extends Plugin {
     if (this.syncing || !this.session || !this.active) return;
     this.syncing = true;
     try {
+      await this.loadSharedApplied();
       const generation = this.generation, identity = this.identity(this.session);
       const channels = new Set(Object.values(this.bindings)
         .filter(b => b.stewardId && !b.paused && b.serverId === this.session!.serverId).map(b => b.channelId));
@@ -646,11 +687,13 @@ export default class RaftPagePlugin extends Plugin {
   proposals(message: Message): Proposal[] {
     if (!this.session || this.applied.includes(message.id)) return [];
     const session = this.session;
+    this.learnSend(message);
     return parseProposals(message.content, message.id, message.senderName).flatMap((p): Proposal[] => {
-      if (this.applied.includes(p.id)) return [];
+      if (this.applied.includes(p.id) || this.sharedApplied.has(p.id)) return [];
       if (p.documentId) {
         const s = this.snapshots[p.documentId];
-        if (!s || s.apiUrl !== session.apiUrl || s.serverId !== session.serverId || s.userId !== session.userId || s.baseHash !== p.baseHash ||
+        if (!s) { const remote = this.remoteDoc(p.documentId, p.baseHash, message); return remote ? [{ ...p, path: remote.path }] : []; }
+        if ( s.apiUrl !== session.apiUrl || s.serverId !== session.serverId || s.userId !== session.userId || s.baseHash !== p.baseHash ||
           // Any agent in the bound conversation may answer; the user still reviews and the base hash still guards the write.
           (message.senderType !== 'agent' && (!s.agentId || message.senderId !== s.agentId))) return [];
         const channelId = message.channelId;
@@ -664,6 +707,28 @@ export default class RaftPagePlugin extends Plugin {
       if (message.senderType !== 'agent' && message.senderId !== binding.stewardId) return [];
       return [{ ...p, path: p.path! }];
     });
+  }
+  /** Remembers a whole-note send this account made, wherever it was made. */
+  private learnSend(message: Message) {
+    if (!this.session || message.senderId !== this.session.userId || !message.channelId) return;
+    const note = sentNote(message.content);
+    if (!note || this.snapshots[note.documentId] || this.remoteDocs.has(note.documentId)) return;
+    this.remoteDocs.set(note.documentId, { path: note.path, baseHash: note.baseHash, channelId: message.channelId,
+      createdAt: message.createdAt || '', identity: this.identity(this.session) });
+    for (const key of [...this.remoteDocs.keys()].slice(0, Math.max(0, this.remoteDocs.size - 200))) this.remoteDocs.delete(key);
+  }
+  /**
+   * A reply to a note sent from another device: the same account, an agent replying in the send's conversation, and
+   * the note bound to that conversation. Unbound notes keep applying only on the device that sent them.
+   */
+  private remoteDoc(documentId: string, baseHash: string | undefined, message?: Message): RemoteDoc | undefined {
+    const d = this.remoteDocs.get(documentId);
+    if (!d || !this.session || d.identity !== this.identity(this.session) || d.baseHash !== baseHash) return;
+    if (message && (message.senderType !== 'agent' || !message.channelId ||
+      (message.channelId !== d.channelId && this.threadParents.get(message.channelId) !== d.channelId))) return;
+    const home = this.threadParents.get(d.channelId) ?? d.channelId;
+    const binding = resolveBinding(this.bindings, d.path, this.session.serverId);
+    return binding && binding.channelId === home ? d : undefined;
   }
   /** Whether a message's channel is the bound channel or one of its threads. */
   inBindingChannel(channelId: string, messageChannel?: string) {
@@ -680,11 +745,15 @@ export default class RaftPagePlugin extends Plugin {
       if (proposal.documentId) {
         const snapshot = this.snapshots[proposal.documentId];
         // A bound note only takes automatic edits from its own channel; edits arriving from elsewhere stay as cards.
-        const binding = resolveBinding(this.bindings, snapshot.path, snapshot.serverId);
+        // (remoteDoc already checked the binding for notes sent from another device.)
+        const binding = snapshot && resolveBinding(this.bindings, snapshot.path, snapshot.serverId);
         if (binding && binding.channelId !== snapshot.channelId) continue;
-        // Only replies to the latest send of a note apply on their own. Replies to earlier sends stay as manual cards,
-        // so an old proposal can never be written ahead of the one the user is waiting for.
-        if (Object.values(this.snapshots).some(other => other.path === snapshot.path && other.createdAt > snapshot.createdAt)) continue;
+        // Only replies to the latest send of a note apply on their own, whichever device sent it. Replies to earlier
+        // sends stay as manual cards, so an old proposal can never be written ahead of the one the user is waiting for.
+        const target = snapshot ?? this.remoteDocs.get(proposal.documentId);
+        if (!target) continue;
+        const at = Date.parse(target.createdAt) || 0;
+        if ([...Object.values(this.snapshots), ...this.remoteDocs.values()].some(other => other.path === target.path && (Date.parse(other.createdAt) || 0) > at)) continue;
       } else {
         // Changes by path apply on their own only from the binding's steward, while syncing is not paused.
         const binding = resolveBinding(this.bindings, proposal.path, this.session!.serverId);
@@ -704,7 +773,11 @@ export default class RaftPagePlugin extends Plugin {
         }
         if (!this.proposals(message).some(p => p.id === proposal.id)) return;
         return this.applyProposal(proposal);
-      }).catch(cause => {
+      }).catch(async cause => {
+        // Another device may have applied it first; its record (or the changed note) arrives with the vault sync.
+        await this.loadSharedApplied();
+        if (this.sharedApplied.has(proposal.id)) return;
+        if (proposal.documentId && !this.snapshots[proposal.documentId]) { this.autoTried.delete(proposal.id); return; }
         if (recent) new Notice(`Raft: ${proposal.senderName}'s change was not applied. ${cause instanceof Error ? cause.message : ''}`, 10000);
       });
     }
@@ -822,7 +895,13 @@ export default class RaftPagePlugin extends Plugin {
     if (this.applied.includes(proposal.id) || this.applied.includes(proposal.messageId)) throw new Error('This proposal has already been applied.');
     const generation = this.generation, identity = this.identity(this.session);
     let before: string | null, after: string;
-    if (proposal.documentId) {
+    const remote = proposal.documentId && !this.snapshots[proposal.documentId] ? this.remoteDoc(proposal.documentId, proposal.baseHash) : undefined;
+    if (remote) {
+      ({ before, after } = await this.writeNote(remote.path, remote.baseHash, current => applyProposalText(current, proposal), () => {
+        this.assertSession(generation, identity);
+        if (this.remoteDocs.get(proposal.documentId!) !== remote) throw new Error('The original note was moved or deleted. Send its current version again.');
+      }, 'This note changed after it was sent. Send the latest version before applying edits.'));
+    } else if (proposal.documentId) {
       const snapshot = this.snapshots[proposal.documentId];
       if (!snapshot || snapshot.userId !== this.session.userId || snapshot.apiUrl !== this.session.apiUrl || snapshot.serverId !== this.session.serverId ||
         snapshot.baseHash !== proposal.baseHash) throw new Error('This edit no longer belongs to the current document session.');
@@ -842,6 +921,7 @@ export default class RaftPagePlugin extends Plugin {
         () => this.assertSession(generation, identity), 'This note changed after the agent read it. The change was not applied.'));
     }
     this.applied.push(proposal.id); this.applied = this.applied.slice(-500);
+    void this.saveSharedApplied();
     this.history.push({ id: proposal.id, path: proposal.path, before, after, senderName: proposal.senderName, at: Date.now() });
     this.history = this.history.slice(-30);
     await this.saveSettings();

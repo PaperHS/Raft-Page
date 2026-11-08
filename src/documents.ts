@@ -158,3 +158,14 @@ export function sentDocumentId(content: string): string | undefined {
   const { context } = splitNoteContext(content);
   return context ? /\{"documentId":"([^"]+)"/.exec(context)?.[1] : undefined;
 }
+
+/**
+ * What another device needs to apply replies to a whole-note send: its documentId, path, and base hash, all read from
+ * the sent message. Selection sends are left out, because the selected range is not part of the message.
+ */
+export function sentNote(content: string): { documentId: string; path: string; baseHash: string } | undefined {
+  const { path, context } = splitNoteContext(content);
+  const edit = context && /\{"documentId":"([^"]+)","baseHash":"([a-f0-9]{64})","content":"<complete updated note>"\}/.exec(context);
+  const notePath = edit ? safeNotePath(path) : null;
+  return edit && notePath ? { documentId: edit[1], path: notePath, baseHash: edit[2] } : undefined;
+}

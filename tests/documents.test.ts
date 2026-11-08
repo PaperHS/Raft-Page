@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { hashText, composeMessage, parseProposals, applyToText, sentDocumentId, splitNoteContext } from '../src/documents';
+import { hashText, composeMessage, parseProposals, applyToText, sentDocumentId, sentNote, splitNoteContext } from '../src/documents';
 
 test('edit protocol preserves Markdown including code fences and binds original note', async () => {
   const baseHash = await hashText('original');
@@ -57,4 +57,15 @@ test('full note replacement can intentionally produce an empty note', () => {
 test('no attachment sends neither note metadata nor content', () => {
   assert.equal(composeMessage('Agent', 'Hello', null), '@Agent Hello');
   assert.equal(composeMessage('', 'Hello', null), 'Hello');
+});
+
+test('another device reads a whole-note send back from the message, never a selection send', async () => {
+  const baseHash = await hashText('original');
+  const context = { id: 'doc-9', path: 'Notes/Original.md', content: 'original', baseHash };
+  const want = { documentId: 'doc-9', path: 'Notes/Original.md', baseHash };
+  assert.deepEqual(sentNote(composeMessage('writer', 'tidy it', context, true)), want);
+  assert.deepEqual(sentNote(composeMessage('writer', 'tidy it', context)), want);
+  assert.equal(sentNote(composeMessage('writer', 'x', { ...context, selection: { from: 0, to: 3 } }, true)), undefined);
+  assert.equal(sentNote(composeMessage('writer', 'x', { ...context, path: '../escape.md' }, true)), undefined);
+  assert.equal(sentNote('plain chat'), undefined);
 });
