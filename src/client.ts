@@ -598,6 +598,18 @@ export class RaftClient {
     return normalizeSentMessage(payload);
   }
 
+  /** Every agent on the signed-in server, for picking who joins a new channel. */
+  async serverAgents(): Promise<Agent[]> {
+    return list(await this.authenticated("GET", "/api/agents"), "agents").map(normalizeAgent);
+  }
+
+  /** Creates a channel the signed-in user joins, with the chosen agents as members (as the web app's New Channel). */
+  async createChannel(name: string, options: { description?: string; private?: boolean; agentIds?: string[] } = {}): Promise<Channel> {
+    const payload = await this.authenticated("POST", "/api/channels", { name: requiredInput(name.replace(/^#/, "").trim(), "channel name"),
+      description: options.description ?? "", visibility: options.private ? "private" : "public", agentIds: options.agentIds ?? [], userIds: [] });
+    return normalizeChannel(object(payload)?.channel ?? payload);
+  }
+
   /** The signed-in user's direct-message channel with an agent, opened if it does not exist yet. */
   async openDm(agentId: string): Promise<string> {
     const payload = object(await this.authenticated("POST", "/api/channels/dm", { agentId: requiredInput(agentId, "agent ID") }));

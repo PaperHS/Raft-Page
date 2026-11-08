@@ -4,7 +4,7 @@ import { RaftClient, RaftClientError, type Session, type Message, type ServerInf
 import { RaftView, VIEW_TYPE } from './src/view';
 import { BRIEF_VERSION, QUIET_MS, composeSyncRequest, syncRootMessage, lastSyncedThrough, newActivity, parseNeeds } from './src/sync';
 import { safeNotePath } from './src/edits';
-import { BINDINGS_FILE, bind, deleteBindings, folderManifest, parseBindings, renameBindings, resolveBinding, serializeBindings, unbind, type Bindings, type ResolvedBinding } from './src/bindings';
+import { BINDINGS_FILE, bind, channelName, deleteBindings, folderManifest, parseBindings, renameBindings, resolveBinding, serializeBindings, unbind, type Bindings, type ResolvedBinding } from './src/bindings';
 import { applyProposalText, composeMessage, hashText, parseProposals, sentDocumentId, sentNote, type DocumentContext, type DocumentSnapshot, type Proposal } from './src/documents';
 
 interface Settings {
@@ -119,6 +119,10 @@ export default class RaftPagePlugin extends Plugin {
     this.addCommand({ id: 'bind-note', name: 'Bind current note or its folder to a channel', callback: () => {
       const file = this.app.workspace.getActiveFile();
       if (file) this.chooseChannel(file.parent && file.parent.path !== '/' ? file.parent : file);
+    } });
+    this.addCommand({ id: 'new-channel', name: 'New channel for the current note', callback: () => {
+      const file = this.app.workspace.getActiveFile();
+      if (file?.extension === 'md') this.newChannel(file); else new Notice('Raft: open a Markdown note first.');
     } });
     this.addCommand({ id: 'toggle-keyboard-debug', name: 'Toggle keyboard layout metrics overlay', callback: () => {
       this.keyboardDebug = !this.keyboardDebug;
@@ -307,7 +311,7 @@ export default class RaftPagePlugin extends Plugin {
   bindingFor(path = this.attachedNote()?.path): ResolvedBinding | null {
     return path && this.session ? resolveBinding(this.bindings, path, this.session.serverId) : null;
   }
-  async bindPath(target: TAbstractFile, channel: { id: string; name: string }) {
+  async bindPath(target: TAbstractFile, channel: { id: string; name: string }, steward?: { id: string; name: string } | null) {
     if (!this.session) throw new Error('Sign in to Raft first.');
     const kind = target instanceof TFolder ? 'folder' : 'file';
     const { bindings, replaced } = bind(this.bindings, target.path, { channelId: channel.id, channelName: channel.name, serverId: this.session.serverId, kind });
@@ -322,7 +326,8 @@ export default class RaftPagePlugin extends Plugin {
         (manifest ? `\n\nFiles:\n${manifest}` : ''));
     } catch { new Notice('Raft: bound, but the notice could not be posted to the channel.'); }
     this.views().forEach(v => v.followNote());
-    void this.chooseSteward(target.path, true).catch(() => {});
+    if (steward) await this.setSteward(target.path, steward);
+    else if (steward === undefined) void this.chooseSteward(target.path, true).catch(() => {});
   }
   async unbindPath(path: string) { await this.saveBindings(unbind(this.bindings, path)); }
   chooseChannel(target: TAbstractFile, onDone?: () => void) {
@@ -341,7 +346,24 @@ export default class RaftPagePlugin extends Plugin {
     const own = this.bindings[file.path];
     menu.addItem(item => item.setTitle(own ? `Rebind from #${own.channelName}…` : 'Bind to Raft channel…').setIcon('link')
       .onClick(() => this.chooseChannel(file)));
+    menu.addItem(item => item.setTitle('New Raft channel for this ' + (file instanceof TFolder ? 'folder…' : 'note…')).setIcon('plus-circle')
+      .onClick(() => this.newChannel(file)));
     if (own) menu.addItem(item => item.setTitle('Unbind from Raft channel').setIcon('unlink').onClick(() => void this.unbindPath(file.path)));
+  }
+  newChannel(target: TAbstractFile, onDone?: () => void) {
+    if (!this.session) { new Notice('Raft: sign in from the Raft sidebar first.'); return; }
+    void this.client.serverAgents().then(agents => new NewChannelModal(this, target, agents, onDone).open(),
+      () => new NewChannelModal(this, target, [], onDone).open());
+  }
+  /** Creates a channel with the chosen agents and binds the note or folder to it; the first agent becomes its steward. */
+  async createChannelFor(target: TAbstractFile, name: string, agents: { id: string; name: string }[], isPrivate: boolean) {
+    if (!this.session) throw new Error('Sign in to Raft first.');
+    const channel = await this.client.createChannel(name, { private: isPrivate, agentIds: agents.map(a => a.id),
+      description: `Obsidian ${target instanceof TFolder ? 'folder' : 'note'} ${target.path}` });
+    this.watchChannel(channel.id);
+    await this.bindPath(target, channel, agents[0] ?? null);
+    this.views().forEach(v => void v.refreshCatalog(true));
+    return channel;
   }
 
   /** Sets or clears the steward of the binding at `path`. */
@@ -1050,6 +1072,44 @@ class ChannelPicker extends FuzzySuggestModal<{ id: string; name: string }> {
       cause => new Notice(`Raft: ${cause instanceof Error ? cause.message : 'binding failed.'}`))
       .finally(() => this.onDone?.());
   }
+}
+/** Name, visibility and agents for a new channel bound to a note or folder. */
+class NewChannelModal extends Modal {
+  constructor(private plugin: RaftPagePlugin, private target: TAbstractFile, private agents: { id: string; name: string; displayName?: string }[],
+    private onDone?: () => void) { super(plugin.app); }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.createEl('h3', { text: `New Raft channel for ${this.target.path}` });
+    const base = this.target instanceof TFile ? this.target.basename : this.target.name;
+    let name = channelName(base), isPrivate = false;
+    const picked = new Set<string>();
+    const preferred = this.agents.find(a => a.name === this.plugin.settings.defaultSteward);
+    if (preferred) picked.add(preferred.id);
+    new Setting(contentEl).setName('Channel name').addText(t => t.setValue(name).onChange(v => { name = v; }));
+    new Setting(contentEl).setName('Private').setDesc('Only you and the agents below can see it.').addToggle(t => t.setValue(false).onChange(v => { isPrivate = v; }));
+    contentEl.createEl('h4', { text: 'Agents' });
+    contentEl.createEl('p', { cls: 'setting-item-description', text: 'The first agent you tick keeps the note up to date (steward); you can change it later.' });
+    const order: string[] = preferred ? [preferred.id] : [];
+    if (!this.agents.length) contentEl.createEl('p', { text: 'No agents could be loaded. You can add them in Raft later.' });
+    for (const agent of this.agents) new Setting(contentEl)
+      .setName(`@${agent.name}${agent.displayName && agent.displayName !== agent.name ? ` (${agent.displayName})` : ''}`)
+      .addToggle(t => t.setValue(picked.has(agent.id)).onChange(v => {
+        if (v) { picked.add(agent.id); order.push(agent.id); } else { picked.delete(agent.id); order.splice(order.indexOf(agent.id), 1); }
+      }));
+    const error = contentEl.createDiv({ cls: 'raft-error' });
+    new Setting(contentEl).addButton(b => b.setButtonText('Cancel').onClick(() => this.close()))
+      .addButton(b => b.setButtonText('Create and bind').setCta().onClick(async () => {
+        if (!name.trim()) { error.setText('Enter a channel name.'); return; }
+        b.setDisabled(true);
+        const agents = order.map(id => this.agents.find(a => a.id === id)!).filter(Boolean);
+        try {
+          const channel = await this.plugin.createChannelFor(this.target, name, agents, isPrivate);
+          new Notice(`Created #${channel.name} and bound ${this.target.path} to it.`);
+          this.close(); this.onDone?.();
+        } catch (e) { error.setText(e instanceof Error ? e.message : 'The channel could not be created.'); b.setDisabled(false); }
+      }));
+  }
+  onClose() { this.contentEl.empty(); }
 }
 type StewardChoice = { id: string; name: string; displayName?: string } | null;
 class StewardPicker extends FuzzySuggestModal<StewardChoice> {

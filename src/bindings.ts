@@ -114,3 +114,8 @@ export function folderManifest(files: { path: string; size: number }[], root: st
 function formatSize(bytes: number): string {
   return bytes < 1024 ? `${bytes} B` : bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
+
+/** A channel name suggested from a note title: lower case, spaces as dashes, letters of any script kept. */
+export function channelName(title: string): string {
+  return title.trim().toLowerCase().replace(/[\s_]+/g, '-').replace(/[^\p{L}\p{N}-]/gu, '').replace(/-+/g, '-').replace(/^-|-$/g, '').slice(0, 80);
+}

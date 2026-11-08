@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { bind, deleteBindings, folderManifest, parseBindings, renameBindings, resolveBinding, serializeBindings, type Bindings } from '../src/bindings';
+import { bind, channelName, deleteBindings, folderManifest, parseBindings, renameBindings, resolveBinding, serializeBindings, type Bindings } from '../src/bindings';
 
 const b = (channelId: string, kind: 'file' | 'folder' = 'folder', serverId = 's1') => ({ channelId, channelName: channelId, serverId, kind });
 
@@ -35,4 +35,10 @@ test('bindings round-trip and malformed entries are dropped', () => {
 test('folder manifests list sizes relative to the folder and cap long lists', () => {
   const files = [{ path: 'P/b.md', size: 2048 }, { path: 'P/a.md', size: 10 }, { path: 'Q/c.md', size: 1 }, { path: 'P/d.md', size: 5 }];
   assert.equal(folderManifest(files, 'P', 2), '- a.md (10 B)\n- b.md (2.0 KB)\n- … 1 more');
+});
+
+test('a new channel name is suggested from the note title in any script', () => {
+  assert.equal(channelName('Trip to Lisbon (draft)'), 'trip-to-lisbon-draft');
+  assert.equal(channelName('小票 扫描_方案'), '小票-扫描-方案');
+  assert.equal(channelName('  --Hello!!  '), 'hello');
 });

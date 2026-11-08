@@ -472,3 +472,17 @@ test("sign in keeps the server's display name", async () => {
     { status: 200, json: [{ id: "s1", slug: "one", name: "Team One" }] }], null);
   assert.equal((await h.client.signIn("https://raft.example", "alice", "pw", "")).serverName, "Team One");
 });
+
+test("a new channel is created with the chosen agents and visibility, and agents are listed server-wide", async () => {
+  const h = harness([
+    { status: 200, json: [{ id: "a1", name: "holiday", displayName: "Holiday" }] },
+    { status: 201, json: { id: "c9", name: "trip-plan", visibility: "private" } },
+  ]);
+  assert.deepEqual(await h.client.serverAgents(), [{ id: "a1", name: "holiday", displayName: "Holiday" }]);
+  assert.deepEqual(await h.client.createChannel("#trip-plan", { private: true, agentIds: ["a1"], description: "note" }), { id: "c9", name: "trip-plan" });
+  assert.equal(h.requests[0].method, "GET");
+  assert.match(h.requests[0].url, /\/api\/agents$/);
+  assert.equal(h.requests[1].method, "POST");
+  assert.match(h.requests[1].url, /\/api\/channels$/);
+  assert.deepEqual(h.requests[1].body, { name: "trip-plan", description: "note", visibility: "private", agentIds: ["a1"], userIds: [] });
+});

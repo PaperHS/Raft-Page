@@ -637,7 +637,7 @@ export class RaftView extends ItemView {
    * Picks up channels created, joined or renamed since the list was loaded, without disturbing the open conversation.
    * Runs from Refresh, when the channel menu is opened, and now and then while polling.
    */
-  private async refreshCatalog(force = false): Promise<void> {
+  async refreshCatalog(force = false): Promise<void> {
     const now = Date.now();
     if (!this.plugin.session || this.catalogLoading || this.catalogRefreshing || (!force && now - this.catalogAt < 10_000)) return;
     const token = this.epoch;

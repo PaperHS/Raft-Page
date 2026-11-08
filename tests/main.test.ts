@@ -840,3 +840,21 @@ test('replies to a note sent from another device apply here when the note is bou
   await f.plugin.applying;
   assert.deepEqual(f.writes, []);
 });
+
+test('a new channel for a note is created with its agents, bound, announced, and gets the first agent as steward', async () => {
+  const f = await fixture();
+  const created: any[] = [], sends: any[] = [];
+  f.plugin.client.createChannel = async (...args: any[]) => { created.push(args); return { id: 'new-ch', name: 'original' }; };
+  f.plugin.client.send = async (...args: any[]) => { sends.push(args); return { id: 'notice' }; };
+  f.plugin.client.agents = async () => { throw new Error('the steward is chosen in the dialog, not looked up'); };
+  const store = new Map<string, string>();
+  f.app.vault.adapter = { exists: async (p: string) => store.has(p), mkdir: async () => {}, write: async (p: string, t: string) => { store.set(p, t); }, read: async (p: string) => store.get(p)! };
+  f.app.vault.configDir = '.obsidian';
+  await f.plugin.createChannelFor(f.file, 'original', [{ id: 'agent-h', name: 'holiday' }, { id: 'agent-c', name: 'cool' }], true);
+  assert.deepEqual(created[0][0], 'original');
+  assert.deepEqual({ private: created[0][1].private, agentIds: created[0][1].agentIds }, { private: true, agentIds: ['agent-h', 'agent-c'] });
+  const binding = f.plugin.bindings['Notes/Original.md'];
+  assert.equal(binding.channelId, 'new-ch'); assert.equal(binding.kind, 'file');
+  assert.equal(binding.stewardId, 'agent-h');
+  assert.equal(sends[0][0], 'new-ch'); assert.match(sends[0][1], /now bound to the Obsidian note `Notes\/Original.md`/);
+});
