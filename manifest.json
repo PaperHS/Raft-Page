@@ -1,7 +1,7 @@
 {
   "id": "raft-page",
   "name": "Raft Page",
-  "version": "0.5.13",
+  "version": "0.5.14",
   "minAppVersion": "1.8.7",
   "description": "Talk to Raft agents alongside your notes, view channel conversations, and review document edits.",
   "author": "PaperHS",

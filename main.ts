@@ -29,7 +29,7 @@ type RemoteDoc = { path: string; baseHash: string; channelId: string; createdAt:
 
 /** A Markdown link reference definition: Raft does not render it, but every device can find it. */
 const REQUEST_TIMEOUT_MS = 60_000;
-const SYNC_STALL_MS = 5 * 60_000;
+const SYNC_STALL_MS = 15 * 60_000;
 const needMarker = (requestId: string) => `\n\n[raft-need]: <> '${requestId}'`;
 
 export default class RaftPagePlugin extends Plugin {
@@ -65,6 +65,9 @@ export default class RaftPagePlugin extends Plugin {
   private needReceipts = new Map<string, string>();
   /** When the running sync pass started (0 = none); a pass stuck past SYNC_STALL_MS no longer blocks the next one. */
   private syncing = 0;
+  private requestCount = 0;
+  /** Recent background sync passes (duration, requests, slow steps), kept in sync-log-<device>.json for diagnosis. */
+  private syncLog: unknown[] = [];
   bindings: Bindings = {};
   /** Live agent activity from Raft's `agent:activity` events, by agent id. */
   agentActivity = new Map<string, string>();
@@ -103,6 +106,7 @@ export default class RaftPagePlugin extends Plugin {
     this.client = new RaftClient(async req => {
       // requestUrl has no timeout of its own; a request that never answers must not stall background syncing.
       let timer = 0;
+      this.requestCount++;
       const res = await Promise.race([
         requestUrl({ url: req.url, method: req.method, headers: req.headers, body: req.rawBody ?? (req.body === undefined ? undefined : JSON.stringify(req.body)), throw: false }),
         new Promise<never>((_, reject) => { timer = window.setTimeout(() => reject(new Error('Raft did not answer in time.')), REQUEST_TIMEOUT_MS); }),
@@ -408,7 +412,13 @@ export default class RaftPagePlugin extends Plugin {
   /** Every 30 seconds: for each binding with a steward, answer its file requests and ask it to sync once the channel is quiet. */
   async syncTick(force?: string) {
     if ((this.syncing && Date.now() - this.syncing < SYNC_STALL_MS) || !this.session || !this.active) return;
-    const started = this.syncing = Date.now();
+    const started = this.syncing = Date.now(), requestsBefore = this.requestCount;
+    const steps: Record<string, number> = {}, failures: string[] = [];
+    const timed = async (name: string, step: () => Promise<unknown>) => {
+      const at = Date.now();
+      try { await step(); } catch (cause) { failures.push(`${name}: ${cause instanceof Error ? cause.message : cause}`); throw cause; }
+      finally { steps[name] = Date.now() - at; }
+    };
     try {
       await this.loadSharedApplied();
       const generation = this.generation, identity = this.identity(this.session);
@@ -417,7 +427,7 @@ export default class RaftPagePlugin extends Plugin {
       // Applying received edits is separate from asking the steward to produce new ones: no quiet-period delay,
       // and no dependency on which channel or thread happens to be visible in the sidebar.
       for (const channel of channels) {
-        try { await this.ingestBoundChannel(channel); }
+        try { await timed(`read ${this.bindingChannelName(channel)}`, () => this.ingestBoundChannel(channel)); }
         catch (cause) { if (force) new Notice(`Raft: could not read document updates. ${cause instanceof Error ? cause.message : ''}`); }
         if (!this.active || generation !== this.generation || identity !== this.identity(this.session)) return;
       }
@@ -426,10 +436,23 @@ export default class RaftPagePlugin extends Plugin {
         if (!this.active || generation !== this.generation || identity !== this.identity(this.session)) return;
         if (!binding.stewardId || binding.serverId !== this.session.serverId) continue;
         if (force ? force !== path : binding.paused) continue;
-        try { await this.syncBinding(path, force === path); }
+        try { await timed(`sync ${path}`, () => this.syncBinding(path, force === path)); }
         catch (cause) { if (force) new Notice(`Raft: sync failed. ${cause instanceof Error ? cause.message : ''}`); }
       }
-    } finally { if (this.syncing === started) this.syncing = 0; }
+    } finally {
+      if (this.syncing === started) this.syncing = 0;
+      void this.recordSync({ at: new Date(started).toISOString(), ms: Date.now() - started, requests: this.requestCount - requestsBefore,
+        slow: Object.fromEntries(Object.entries(steps).filter(([, ms]) => ms > 2000).sort((a, b) => b[1] - a[1])), failures });
+    }
+  }
+  private bindingChannelName(channelId: string) {
+    return Object.values(this.bindings).find(b => b.channelId === channelId)?.channelName ?? channelId;
+  }
+  private async recordSync(entry: unknown) {
+    this.syncLog = [...this.syncLog, entry].slice(-50);
+    const adapter = this.app.vault.adapter;
+    if (!adapter || !this.deviceId) return;
+    try { await adapter.write(`${this.pluginDir()}/sync-log-${this.deviceId}.json`, JSON.stringify(this.syncLog, null, 1)); } catch { /* diagnostics only */ }
   }
   syncNow(path: string) { void this.syncTick(path); }
 

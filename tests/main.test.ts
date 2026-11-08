@@ -873,7 +873,7 @@ test('a sync pass that never finishes stops blocking background syncing after a 
   (f.plugin as any).syncing = Date.now() - 60_000;
   await f.plugin.syncTick();
   assert.equal(reads, 0, 'a recent pass is still running');
-  (f.plugin as any).syncing = Date.now() - 6 * 60_000;
+  (f.plugin as any).syncing = Date.now() - 16 * 60_000;
   f.plugin.bindings.Notes.paused = undefined;
   await f.plugin.syncTick().catch(() => {});
   assert.ok(reads > 0, 'a stalled pass no longer blocks');
