@@ -555,8 +555,8 @@ test('a steward edits notes in its bound folder by path, creates notes there, an
 
   f.plugin.autoApply(message('other', 'helper', 'channel-a', edit));
   await f.plugin.applying;
-  assert.deepEqual(f.writes, [], 'another agent only gets a card');
-  assert.equal(f.plugin.proposals(message('other', 'helper', 'channel-a', edit)).length, 1);
+  assert.deepEqual(f.writes, [], 'only the steward changes the notes');
+  assert.equal(f.plugin.proposals(message('other', 'helper', 'channel-a', edit)).length, 0, 'and nobody is asked to apply another agent\'s edit');
   assert.equal(f.plugin.proposals(message('elsewhere', 'steward', 'channel-b', edit)).length, 0, 'path edits only count in the bound channel');
   assert.equal(f.plugin.proposals(message('outside', 'steward', 'channel-a', { ...edit, path: 'Other/x.md' })).length, 0, 'and only inside the binding');
 
@@ -577,6 +577,12 @@ test('a steward edits notes in its bound folder by path, creates notes there, an
   f.plugin.autoApply(message('s3', 'steward', 'channel-a', { ...edit, baseHash: await hashText('original') }));
   await f.plugin.applying;
   assert.equal(f.disk.get(f.file), 'original', 'a paused steward\'s edits wait as cards');
+
+  // Without a steward, any agent in the bound channel may change the notes; no card for the user either.
+  delete f.plugin.bindings.Notes.stewardId; delete f.plugin.bindings.Notes.paused;
+  f.plugin.autoApply(message('h1', 'helper', 'channel-a', { ...edit, baseHash: await hashText('original') }));
+  await f.plugin.applying;
+  assert.equal(f.disk.get(f.file), 'synced');
 });
 
 test('background polling applies steward edits in unopened ordinary threads, including old roots and reply pages', async () => {

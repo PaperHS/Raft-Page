@@ -1,6 +1,6 @@
 {
   "name": "raft-page",
-  "version": "0.5.11",
+  "version": "0.5.12",
   "private": true,
   "license": "FSL-1.1-ALv2",
   "description": "Raft channel conversations and document collaboration in Obsidian",

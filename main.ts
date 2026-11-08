@@ -726,7 +726,8 @@ export default class RaftPagePlugin extends Plugin {
       const binding = p.path ? resolveBinding(this.bindings, p.path, session.serverId) : null;
       if (!binding || (binding.kind === 'file' && p.create) || !(this.inBindingChannel(binding.channelId, message.channelId) ||
         (binding.syncChannelId && this.inBindingChannel(binding.syncChannelId, message.channelId)))) return [];
-      if (message.senderType !== 'agent' && message.senderId !== binding.stewardId) return [];
+      // With a steward, only the steward changes the notes; other agents' edits are conversation it may record.
+      if (binding.stewardId ? message.senderId !== binding.stewardId : message.senderType !== 'agent') return [];
       return [{ ...p, path: p.path! }];
     });
   }
@@ -777,9 +778,10 @@ export default class RaftPagePlugin extends Plugin {
         const at = Date.parse(target.createdAt) || 0;
         if ([...Object.values(this.snapshots), ...this.remoteDocs.values()].some(other => other.path === target.path && (Date.parse(other.createdAt) || 0) > at)) continue;
       } else {
-        // Changes by path apply on their own only from the binding's steward, while syncing is not paused.
+        // Changes by path apply on their own from the binding's steward while syncing is not paused, or from any
+        // agent when the binding has no steward. Nobody is asked to apply them by hand.
         const binding = resolveBinding(this.bindings, proposal.path, this.session!.serverId);
-        if (!binding?.stewardId || binding.paused || message.senderId !== binding.stewardId) continue;
+        if (!binding || binding.paused || (binding.stewardId && message.senderId !== binding.stewardId)) continue;
       }
       const generation = this.generation, identity = this.identity(this.session);
       const binding = this.bindingFor(proposal.path);
