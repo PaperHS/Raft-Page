@@ -28,6 +28,8 @@ type Snapshot = Omit<DocumentSnapshot, 'content'> & { userId: string; apiUrl: st
 type RemoteDoc = { path: string; baseHash: string; channelId: string; createdAt: string; identity: string };
 
 /** A Markdown link reference definition: Raft does not render it, but every device can find it. */
+const REQUEST_TIMEOUT_MS = 60_000;
+const SYNC_STALL_MS = 5 * 60_000;
 const needMarker = (requestId: string) => `\n\n[raft-need]: <> '${requestId}'`;
 
 export default class RaftPagePlugin extends Plugin {
@@ -61,7 +63,8 @@ export default class RaftPagePlugin extends Plugin {
   private scannedSyncThreads = new Map<string, string>();
   private answeringNeeds = new Set<string>();
   private needReceipts = new Map<string, string>();
-  private syncing = false;
+  /** When the running sync pass started (0 = none); a pass stuck past SYNC_STALL_MS no longer blocks the next one. */
+  private syncing = 0;
   bindings: Bindings = {};
   /** Live agent activity from Raft's `agent:activity` events, by agent id. */
   agentActivity = new Map<string, string>();
@@ -98,7 +101,12 @@ export default class RaftPagePlugin extends Plugin {
       }
     } catch { new Notice('Raft: saved login could not be loaded. Please sign in again.'); }
     this.client = new RaftClient(async req => {
-      const res = await requestUrl({ url: req.url, method: req.method, headers: req.headers, body: req.rawBody ?? (req.body === undefined ? undefined : JSON.stringify(req.body)), throw: false });
+      // requestUrl has no timeout of its own; a request that never answers must not stall background syncing.
+      let timer = 0;
+      const res = await Promise.race([
+        requestUrl({ url: req.url, method: req.method, headers: req.headers, body: req.rawBody ?? (req.body === undefined ? undefined : JSON.stringify(req.body)), throw: false }),
+        new Promise<never>((_, reject) => { timer = window.setTimeout(() => reject(new Error('Raft did not answer in time.')), REQUEST_TIMEOUT_MS); }),
+      ]).finally(() => window.clearTimeout(timer));
       let json: unknown = {};
       try { json = res.json; } catch { /* Errors without JSON are handled by the client. */ }
       return { status: res.status, json };
@@ -399,8 +407,8 @@ export default class RaftPagePlugin extends Plugin {
 
   /** Every 30 seconds: for each binding with a steward, answer its file requests and ask it to sync once the channel is quiet. */
   async syncTick(force?: string) {
-    if (this.syncing || !this.session || !this.active) return;
-    this.syncing = true;
+    if ((this.syncing && Date.now() - this.syncing < SYNC_STALL_MS) || !this.session || !this.active) return;
+    const started = this.syncing = Date.now();
     try {
       await this.loadSharedApplied();
       const generation = this.generation, identity = this.identity(this.session);
@@ -421,7 +429,7 @@ export default class RaftPagePlugin extends Plugin {
         try { await this.syncBinding(path, force === path); }
         catch (cause) { if (force) new Notice(`Raft: sync failed. ${cause instanceof Error ? cause.message : ''}`); }
       }
-    } finally { this.syncing = false; }
+    } finally { if (this.syncing === started) this.syncing = 0; }
   }
   syncNow(path: string) { void this.syncTick(path); }
 

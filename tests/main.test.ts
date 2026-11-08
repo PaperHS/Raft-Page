@@ -864,3 +864,18 @@ test('a new channel for a note is created with its agents, bound, announced, and
   assert.equal(binding.stewardId, 'agent-h');
   assert.equal(sends[0][0], 'new-ch'); assert.match(sends[0][1], /now bound to the Obsidian note `Notes\/Original.md`/);
 });
+
+test('a sync pass that never finishes stops blocking background syncing after a few minutes', async () => {
+  const f = await fixture(false);
+  f.plugin.bindings = { Notes: { channelId: 'channel-a', channelName: 'a', serverId: 'server-a', kind: 'folder', stewardId: 'steward', stewardName: 'steward', paused: true } };
+  let reads = 0;
+  f.plugin.client.messages = async () => { reads++; return { messages: [] }; };
+  (f.plugin as any).syncing = Date.now() - 60_000;
+  await f.plugin.syncTick();
+  assert.equal(reads, 0, 'a recent pass is still running');
+  (f.plugin as any).syncing = Date.now() - 6 * 60_000;
+  f.plugin.bindings.Notes.paused = undefined;
+  await f.plugin.syncTick().catch(() => {});
+  assert.ok(reads > 0, 'a stalled pass no longer blocks');
+  assert.equal((f.plugin as any).syncing, 0);
+});
