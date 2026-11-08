@@ -8,12 +8,12 @@ import { hashText } from '../src/documents';
 // Bundle the real plugin, replacing only its host, transport, and UI dependencies.
 // The document protocol remains real; the hash hook controls its async boundary.
 const root = fileURLToPath(new URL('../', import.meta.url));
-let Plugin: any, MarkdownView: any, TFile: any, setHashHook: any;
+let Plugin: any, MarkdownView: any, TFile: any, TFolder: any, setHashHook: any;
 before(async () => {
 const result = await build({
   stdin: {
     contents: `export { default as Plugin } from ${JSON.stringify(root + 'main.ts')};
-      export { MarkdownView, TFile } from 'obsidian';
+      export { MarkdownView, TFile, TFolder } from 'obsidian';
       export { setHashHook } from './src/documents';`,
     resolveDir: root, loader: 'ts',
   },
@@ -56,7 +56,7 @@ const result = await build({
 });
 const bundled = { exports: {} as any };
 new Function('module', 'exports', 'require', result.outputFiles[0].text)(bundled, bundled.exports, createRequire(import.meta.url));
-({ Plugin, MarkdownView, TFile, setHashHook } = bundled.exports);
+({ Plugin, MarkdownView, TFile, TFolder, setHashHook } = bundled.exports);
 });
 
 function deferred() {
@@ -563,9 +563,14 @@ test('a steward edits notes in its bound folder by path, creates notes there, an
   f.plugin.autoApply(message('s1', 'steward', 'channel-a', edit));
   await f.plugin.applying;
   assert.equal(f.disk.get(f.file), 'synced');
+  const fronts: any[] = [];
+  f.app.fileManager = { processFrontMatter: async (file: any, fn: (front: any) => void) => {
+    const front: any = {}; fn(front); fronts.push(front); f.disk.set(file, `---\nchannel: ${front.channel}\n---\n` + f.disk.get(file));
+  } };
   f.plugin.autoApply(message('s2', 'steward', 'channel-a', { path: 'Notes/New.md', create: true, content: '# New' }));
   await f.plugin.applying;
-  assert.equal(f.disk.get(f.files.get('Notes/New.md')), '# New');
+  assert.equal(f.disk.get(f.files.get('Notes/New.md')), '---\nchannel: #a\n---\n# New');
+  assert.equal(fronts[0].channel, '#a', 'a steward\'s new note carries its binding\'s channel');
 
   assert.equal(f.plugin.undoable('s1').length, 1);
   await f.plugin.undo('s1:0');
@@ -785,7 +790,7 @@ test('a read request answered by another device or sign-in is not answered again
 
 test('a steward edit posted in an earlier sync thread for the same note is still applied, and read once', async () => {
   const f = await readFixture();
-  Object.assign(f.plugin.bindings.Notes, { syncChannelId: 'dm', syncRootId: 'new-root', syncBrief: 5 });
+  Object.assign(f.plugin.bindings.Notes, { syncChannelId: 'dm', syncRootId: 'new-root', syncBrief: 6 });
   const edit = '```raft-edit\n' + JSON.stringify({ path: f.file.path, baseHash: await hashText('original'), content: 'updated by steward' }) + '\n```';
   const oldRoot = { id: 'old-root', seq: 1, channelId: 'dm', senderId: 'alice', content: '📝 Document sync for `Notes` (#a) · steward @steward',
     createdAt: new Date().toISOString(), threadSummary: { replyCount: 1, lastReplyAt: '2026-11-06T13:38:00Z' } };
@@ -863,6 +868,32 @@ test('a new channel for a note is created with its agents, bound, announced, and
   assert.equal(binding.channelId, 'new-ch'); assert.equal(binding.kind, 'file');
   assert.equal(binding.stewardId, 'agent-h');
   assert.equal(sends[0][0], 'new-ch'); assert.match(sends[0][1], /now bound to the Obsidian note `Notes\/Original.md`/);
+});
+
+test('a new channel with a document type fills an empty note from its template and sets the binding properties', async () => {
+  const f = await fixture();
+  f.plugin.client.createChannel = async () => ({ id: 'new-ch', name: 'radar' });
+  f.plugin.client.send = async () => ({ id: 'notice' });
+  const store = new Map<string, string>();
+  f.app.vault.adapter = { exists: async (p: string) => store.has(p), mkdir: async () => {}, write: async (p: string, t: string) => { store.set(p, t); }, read: async (p: string) => store.get(p)! };
+  f.app.vault.configDir = '.obsidian';
+  const template = new TFile('_templates/项目.md'); template.basename = '项目';
+  const standard = new TFile('_templates/文档规范.md'); standard.basename = '文档规范';
+  const folder = new TFolder('_templates'); folder.children = [template, standard];
+  f.files.set('_templates', folder); f.files.set(template.path, template);
+  f.disk.set(template, '---\ntype: 项目\n---\n# {{title}}\n');
+  f.disk.set(f.file, '  \n'); f.file.basename = 'Original';
+  const fronts: any[] = [];
+  f.app.fileManager = { processFrontMatter: async (_file: any, fn: (front: any) => void) => { const front = { type: '项目', tags: ['topic/x'] }; fn(front); fronts.push(front); } };
+  assert.deepEqual(f.plugin.docTypes(), ['项目']);
+  await f.plugin.createChannelFor(f.file, 'radar', [{ id: 'agent-h', name: 'holiday' }], false, '项目');
+  assert.equal(f.disk.get(f.file), '---\ntype: 项目\n---\n# Original\n');
+  assert.equal(fronts[0].channel, '#radar'); assert.equal(fronts[0].steward, 'holiday');
+  assert.deepEqual(fronts[0].tags, ['doc/项目', 'topic/x']);
+  f.disk.set(f.file, 'kept'); fronts.length = 0;
+  await f.plugin.applyDocType(f.file, '项目', 'radar');
+  assert.equal(f.disk.get(f.file), 'kept', 'a note with text keeps it; only properties change');
+  assert.equal(fronts.length, 1);
 });
 
 test('a sync pass that never finishes stops blocking background syncing after a few minutes', async () => {

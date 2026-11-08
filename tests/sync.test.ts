@@ -39,7 +39,8 @@ test('the sync thread opens with the steward brief addressed to the steward', ()
   assert.ok(root.startsWith('📝 Document sync for `product` (#plan) · steward @scribe'));
   for (const part of ['do not reply', 'replace_section', 'raft-need', 'baseHash', 'vault-relative', 'Missing or stale cache', 'Confirm the response']) assert.ok(root.includes(part), part);
   assert.ok(root.includes('Reads and edits work here and in #plan or its threads'));
-  assert.ok(root.split('\n').length === 2 && root.length < 1400, 'kept short: it is shown with every request');
+  for (const part of ['文档规范', 'instead of appending corrections', '未核实', '变更记录', 'doc/<type>']) assert.ok(root.includes(part), part);
+  assert.ok(root.split('\n').length === 3 && root.length < 1800, 'kept short: it is shown with every request');
 });
 
 test('sync openers and requests, even ones posted in the channel by older versions, are not conversation', () => {

@@ -62,6 +62,11 @@ Raft Page 允许你将一个 Raft 频道直接与 Obsidian 中的**单篇笔记*
   - 避免频道内多位 Agent 争相修改同一篇笔记造成写入冲突；
   - 责任明确：文档管家如同严谨的速记员与架构师，负责在后台守护讨论共识。
 
+### 3. 文档类型与模板
+- 在库里的 `_templates/` 文件夹放每种文档类型一个模板（如 `项目.md`、`调研.md`），写作规范放在 `文档规范.md`。把 Obsidian 自带的“模板”插件也指向这个文件夹，就能手动插入；
+- **New Raft channel for this note…** 弹窗里可以选 **Document type**：空笔记会按模板生成（自动填 `{{title}}`、`{{date}}`）；每篇都会写上 `type`、`doc/<类型>` 标签，以及绑定的 `channel`、`steward`、`created`、`updated` 属性；
+- 管家在绑定文件夹里新建的笔记也会自动带上这些属性，管家说明里也要求它按 `_templates/文档规范.md` 写。
+
 ---
 
 ## 4. 主要特色能力（Key Features）

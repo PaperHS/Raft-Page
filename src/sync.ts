@@ -11,7 +11,7 @@ const NEED_BLOCK = /^```raft-need\s*\r?\n([\s\S]*?)^```\s*$/gm;
 export const BIND_NOTICE = '📁 This channel is now bound to the Obsidian';
 
 /** Bumped when the brief changes, so bindings start a fresh sync thread that carries the new one. */
-export const BRIEF_VERSION = 5;
+export const BRIEF_VERSION = 6;
 
 /**
  * The steward's instructions. They open the sync thread, and Raft shows a thread's first message with every reply it
@@ -21,6 +21,7 @@ export function syncRootMessage(binding: string, steward: string, channel: strin
   return [
     `📝 Document sync for \`${binding}\` (#${channel}) · steward @${steward}`,
     `@${steward}: keep these notes in step with what #${channel} decides. For each request, read the listed messages and record only decisions, changed requirements, corrections and to-dos (📌 = must record, 🚫 = never). Nothing to record → do not reply. Otherwise reply with one summary line and, per note, a code block fenced as \`\`\`raft-edit (not json) containing \`{"path","baseHash","ops":[…]}\` with ops \`append\`/\`replace_section\` {heading, content} or \`replace\` {find, with}, each matching one place; new note: \`{"path","create":true,"content"}\`. Need a note's text → \`\`\`raft-need block \`{"paths":[…]}\`. Reads and edits work here and in #${channel} or its threads; read replies stay in a thread. Before discussing or editing, obtain current text and hash from attachments or raft-need. Missing or stale cache → request again before asking the user to re-upload; never guess contents or hashes. Paths are vault-relative, not local filesystem paths. Confirm the response before claiming success.`,
+    `Writing (vault _templates/文档规范.md): keep the YAML properties and set \`updated\` to today; fix the paragraph that is wrong instead of appending corrections; give facts a source link and mark unchecked ones 未核实; say who decided, with the message link; add one line per change under 变更记录. A new note starts with properties type (项目/调研/决策/现状/内容稿/知识), status, owner, tags [doc/<type>, …] and summary.`,
   ].join('\n');
 }
 

@@ -76,6 +76,12 @@ A note uses its own binding, otherwise the nearest bound folder above it. Openin
 
 - A cheap, fast model is enough for this role. The steward needs no setup: its instructions travel in the sync thread (see [STEWARD.md](STEWARD.md) for the long form).
 
+### Document types and templates
+
+- Put one template note per document type in the vault's `_templates/` folder (for example `项目.md`, `调研.md`), plus your writing standard as `文档规范.md`. Point Obsidian's core **Templates** plugin at the same folder to use them by hand.
+- **New Raft channel for this note…** offers a **Document type**. An empty note starts from that template (`{{title}}` and `{{date}}` are filled in); every note gets the `type`, a `doc/<type>` tag, and the binding's `channel`, `steward`, `created` and `updated` properties.
+- Notes the steward creates in a bound folder get the binding's properties too, and the steward is told to follow `_templates/文档规范.md`.
+
 ---
 
 ## 4. Key features

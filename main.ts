@@ -4,6 +4,7 @@ import { RaftClient, RaftClientError, type Session, type Message, type ServerInf
 import { RaftView, VIEW_TYPE } from './src/view';
 import { BRIEF_VERSION, QUIET_MS, composeSyncRequest, syncRootMessage, lastSyncedThrough, newActivity, parseNeeds } from './src/sync';
 import { safeNotePath } from './src/edits';
+import { TEMPLATE_FOLDER, fillTemplate, formatDate, mergeProperties, templateTypes } from './src/templates';
 import { BINDINGS_FILE, bind, channelName, deleteBindings, folderManifest, parseBindings, renameBindings, resolveBinding, serializeBindings, unbind, type Bindings, type ResolvedBinding } from './src/bindings';
 import { applyProposalText, composeMessage, hashText, parseProposals, sentDocumentId, sentNote, type DocumentContext, type DocumentSnapshot, type Proposal } from './src/documents';
 
@@ -368,14 +369,37 @@ export default class RaftPagePlugin extends Plugin {
       () => new NewChannelModal(this, target, [], onDone).open());
   }
   /** Creates a channel with the chosen agents and binds the note or folder to it; the first agent becomes its steward. */
-  async createChannelFor(target: TAbstractFile, name: string, agents: { id: string; name: string }[], isPrivate: boolean) {
+  async createChannelFor(target: TAbstractFile, name: string, agents: { id: string; name: string }[], isPrivate: boolean, docType?: string) {
     if (!this.session) throw new Error('Sign in to Raft first.');
     const channel = await this.client.createChannel(name, { private: isPrivate, agentIds: agents.map(a => a.id),
       description: `Obsidian ${target instanceof TFolder ? 'folder' : 'note'} ${target.path}` });
     this.watchChannel(channel.id);
     await this.bindPath(target, channel, agents[0] ?? null);
+    if (docType && target instanceof TFile) await this.applyDocType(target, docType, channel.name, agents[0]?.name);
     this.views().forEach(v => void v.refreshCatalog(true));
     return channel;
+  }
+
+  /** Document types that have a template note in the vault's `_templates/` folder. */
+  docTypes(): string[] {
+    const folder = this.app.vault.getAbstractFileByPath(TEMPLATE_FOLDER);
+    return folder instanceof TFolder ? templateTypes(folder.children.filter((c): c is TFile => c instanceof TFile && c.extension === 'md').map(c => c.basename)) : [];
+  }
+
+  /** An empty note starts from its type's template; every note gets the type and its binding's properties. */
+  async applyDocType(file: TFile, type: string, channel: string, steward?: string) {
+    const template = this.app.vault.getAbstractFileByPath(`${TEMPLATE_FOLDER}/${type}.md`);
+    if (template instanceof TFile) {
+      const text = fillTemplate(await this.app.vault.read(template), file.basename, new Date());
+      await this.app.vault.process(file, current => current.trim() ? current : text);
+    }
+    await this.setBindingProperties(file, { type, channel, steward });
+  }
+
+  async setBindingProperties(file: TFile, p: { type?: string; channel: string; steward?: string }) {
+    const manager = (this.app as { fileManager?: { processFrontMatter?: (f: TFile, fn: (front: Record<string, unknown>) => void) => Promise<void> } }).fileManager;
+    if (!manager?.processFrontMatter) return;
+    await manager.processFrontMatter(file, front => mergeProperties(front, { ...p, date: formatDate(new Date()) }));
   }
 
   /** Sets or clears the steward of the binding at `path`. */
@@ -969,8 +993,13 @@ export default class RaftPagePlugin extends Plugin {
       const folder = proposal.path.split('/').slice(0, -1).join('/');
       if (folder && !this.app.vault.getAbstractFileByPath(folder)) await this.app.vault.createFolder(folder);
       this.assertSession(generation, identity);
-      await this.app.vault.create(proposal.path, proposal.content ?? '');
-      before = null; after = proposal.content ?? '';
+      const created = await this.app.vault.create(proposal.path, proposal.content ?? '');
+      // A steward's new note in a bound folder carries that binding's channel and steward, like notes made from the dialog.
+      const owner = resolveBinding(this.bindings, proposal.path, this.session.serverId);
+      if (owner && created instanceof TFile) {
+        await this.setBindingProperties(created, { channel: owner.channelName || owner.channelId, steward: owner.stewardName });
+      }
+      before = null; after = created instanceof TFile ? await this.app.vault.read(created) : proposal.content ?? '';
     } else {
       ({ before, after } = await this.writeNote(proposal.path, proposal.baseHash!, current => applyProposalText(current, proposal),
         () => this.assertSession(generation, identity), 'This note changed after the agent read it. The change was not applied.'));
@@ -1120,6 +1149,11 @@ class NewChannelModal extends Modal {
     if (preferred) picked.add(preferred.id);
     new Setting(contentEl).setName('Channel name').addText(t => t.setValue(name).onChange(v => { name = v; }));
     new Setting(contentEl).setName('Private').setDesc('Only you and the agents below can see it.').addToggle(t => t.setValue(false).onChange(v => { isPrivate = v; }));
+    let docType = '';
+    const types = this.target instanceof TFile ? this.plugin.docTypes() : [];
+    if (types.length) new Setting(contentEl).setName('Document type')
+      .setDesc(`Sets the note's type and properties. An empty note starts from ${TEMPLATE_FOLDER}/<type>.md.`)
+      .addDropdown(d => { d.addOption('', 'None'); for (const t of types) d.addOption(t, t); d.onChange(v => { docType = v; }); });
     contentEl.createEl('h4', { text: 'Agents' });
     contentEl.createEl('p', { cls: 'setting-item-description', text: 'The first agent you tick keeps the note up to date (steward); you can change it later.' });
     const order: string[] = preferred ? [preferred.id] : [];
@@ -1136,7 +1170,7 @@ class NewChannelModal extends Modal {
         b.setDisabled(true);
         const agents = order.map(id => this.agents.find(a => a.id === id)!).filter(Boolean);
         try {
-          const channel = await this.plugin.createChannelFor(this.target, name, agents, isPrivate);
+          const channel = await this.plugin.createChannelFor(this.target, name, agents, isPrivate, docType || undefined);
           new Notice(`Created #${channel.name} and bound ${this.target.path} to it.`);
           this.close(); this.onDone?.();
         } catch (e) { error.setText(e instanceof Error ? e.message : 'The channel could not be created.'); b.setDisabled(false); }

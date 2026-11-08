@@ -69,6 +69,19 @@ Other forms:
 Use the `baseHash` from the request (the 12-character short hash is enough). If the note changed since, Raft Page refuses the edit and shows it to the
 user as a card instead.
 
+## How to write
+
+The vault's `_templates/文档规范.md` is the standard; `_templates/` has one template per document type
+(项目, 调研, 决策, 现状, 内容稿, 知识).
+
+- Keep the note's YAML properties, and set `updated` to today whenever you change it.
+- Fix the paragraph that is wrong. Do not append "correction" paragraphs at the end.
+- Give facts a source link (and the date you checked); mark anything unchecked as 未核实.
+- For a decision, say who decided and when, with the message link.
+- Add one line per change under `## 变更记录`: date · what changed · message link.
+- A new note starts with properties `type`, `status`, `owner`, `tags` (`doc/<type>` first) and `summary`. Raft Page adds the
+  binding's `channel`, `steward`, `created` and `updated` itself.
+
 ## Need a note you don't have?
 
 Ask in the sync thread, the bound channel or any of its threads. Raft Page replies in a thread (the same thread
