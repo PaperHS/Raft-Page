@@ -60,7 +60,7 @@ export class RaftView extends ItemView {
   private attachButton!: HTMLButtonElement;
   private selectionButton!: HTMLButtonElement;
   private mentionButton!: HTMLButtonElement;
-  private threadBar!: HTMLElement;
+  private threadBack!: HTMLButtonElement;
   private signOutButton!: HTMLButtonElement;
   private bindButton!: HTMLButtonElement;
   private bindingSource!: HTMLElement;
@@ -223,25 +223,36 @@ export class RaftView extends ItemView {
   }
 
   /** Shows which channel the open note is bound to, and offers a way back after a manual channel switch. */
+  /** The binding shown in the header: the current channel's binding first, otherwise the open note's. */
+  private headerBinding() {
+    const channelId = this.thread?.parentChannelId || this.plugin.settings.channelId;
+    return this.plugin.channelBinding(channelId) ?? this.plugin.bindingFor();
+  }
+
   private updateBinding(): void {
-    const binding = this.plugin.bindingFor();
+    const noteBinding = this.plugin.bindingFor();
+    const binding = this.headerBinding();
     const note = this.plugin.getAttachedName();
     this.bindButton.toggleClass('is-bound', !!binding);
-    this.bindButton.disabled = !note;
-    const label = !note ? 'Open a note to bind it to a channel' : binding ? `Bound to #${binding.channelName}` : 'Bind this note to a channel';
+    this.bindButton.disabled = !note && !binding;
+    const label = binding ? `Bound to ${binding.path} (#${binding.channelName})`
+      : note ? 'Bind this note to a channel' : 'Open a note to bind it to a channel';
     this.bindButton.setAttribute('aria-label', label);
     this.bindButton.title = label;
-    this.bindingSource.hidden = !note;
+    this.bindingSource.hidden = !note && !binding;
     const steward = binding?.stewardId ? ` · steward @${binding.stewardName}${binding.paused ? ' (paused)' : ''}` : '';
-    this.bindingSource.setText(!binding ? 'Not bound' : (binding.inherited ? `📁 ${binding.path} · from folder` : `📄 ${binding.path.split('/').pop()}`) + steward);
+    const source = !binding ? 'Not bound' : binding.kind === 'folder'
+      ? `📁 ${binding.path}${noteBinding?.path === binding.path && noteBinding.inherited ? ' · from folder' : ''}`
+      : `📄 ${binding.path.split('/').pop()}`;
+    this.bindingSource.setText(source + steward);
     this.bindingSource.title = binding ? `${binding.path} → #${binding.channelName}` : '';
     this.renderSteward(binding?.stewardId ? binding : null);
-    const away = !!binding && binding.channelId !== this.plugin.settings.channelId && this.channels.some(c => c.id === binding.channelId);
+    const away = !!noteBinding && noteBinding.channelId !== this.plugin.settings.channelId && this.channels.some(c => c.id === noteBinding.channelId);
     this.bindingBar.hidden = !away;
     if (away) {
       this.bindingBar.empty();
-      this.bindingBar.createSpan({ text: `This note is bound to #${binding.channelName}` });
-      this.button(this.bindingBar, 'Return', () => { void this.changeChannel(binding.channelId); });
+      this.bindingBar.createSpan({ text: `This note is bound to #${noteBinding.channelName}` });
+      this.button(this.bindingBar, 'Return', () => { void this.changeChannel(noteBinding.channelId); });
     }
   }
 
@@ -273,8 +284,8 @@ export class RaftView extends ItemView {
     const file = this.app.workspace.getActiveFile();
     const note = this.plugin.getAttachedName();
     const target = note ? this.app.vault.getAbstractFileByPath(note) : file;
-    if (!target) return;
-    const binding = this.plugin.bindingFor();
+    const binding = this.headerBinding();
+    if (!target && !binding) return;
     const channel = this.channels.find(c => c.id === this.plugin.settings.channelId);
     const menu = new Menu();
     if (binding) {
@@ -289,7 +300,7 @@ export class RaftView extends ItemView {
       }
       menu.addItem(item => item.setTitle(`Unbind ${binding.path}`).setIcon('unlink').onClick(() => { void this.plugin.unbindPath(binding.path); }));
       menu.addItem(item => item.setTitle('Reveal in file explorer').setIcon('folder-search').onClick(() => this.plugin.revealInTree(binding.path)));
-    } else if (channel) {
+    } else if (channel && target) {
       const bindTo = (path: string, label: string) => {
         const found = this.app.vault.getAbstractFileByPath(path);
         if (found) menu.addItem(item => item.setTitle(label).setIcon('link').onClick(() => {
@@ -445,16 +456,19 @@ export class RaftView extends ItemView {
     this.historyLimited = false;
     this.root = this.contentEl.createDiv({ cls: 'raft-view raft-conversation' });
     const header = this.root.createEl('header', { cls: 'raft-header' });
+    this.threadBack = this.iconButton(header, 'Back to channel', 'arrow-left', () => this.closeThread());
+    this.threadBack.addClass('raft-thread-back');
+    this.threadBack.hidden = true;
     this.headerTile = header.createSpan({ cls: 'raft-channel-tile', attr: { 'aria-hidden': 'true' } });
     setIcon(this.headerTile, 'hash');
     const titleBox = header.createDiv({ cls: 'raft-header-title' });
     this.channelSelect = titleBox.createEl('select', { cls: 'raft-channel-select' });
-    this.bindingSource = titleBox.createDiv({ cls: 'raft-binding-source' });
     this.channelSelect.setAttribute('aria-label', 'Channel');
     this.channelSelect.addEventListener('change', () => { void this.changeChannel(this.channelSelect.value); });
     for (const event of ['focus', 'pointerdown']) this.channelSelect.addEventListener(event, () => { void this.refreshCatalog(); });
     this.threadTitle = titleBox.createDiv({ cls: 'raft-thread-heading' });
     this.threadTitle.hidden = true;
+    this.bindingSource = titleBox.createDiv({ cls: 'raft-binding-source' });
     this.status = titleBox.createDiv({ cls: 'raft-status', attr: { role: 'status', 'aria-live': 'polite' } });
     this.stewardBadge = header.createSpan({ cls: 'raft-steward' });
     this.stewardBadge.hidden = true;
@@ -470,8 +484,6 @@ export class RaftView extends ItemView {
     this.alert = this.root.createDiv({ cls: 'raft-error raft-conversation-error', attr: { role: 'alert' } });
     this.bindingBar = this.root.createDiv({ cls: 'raft-binding-bar' });
     this.bindingBar.hidden = true;
-    this.threadBar = this.root.createDiv({ cls: 'raft-thread-bar' });
-    this.threadBar.hidden = true;
     this.history = this.root.createDiv({ cls: 'raft-history scrollbar-quiet', attr: { 'aria-label': 'Conversation history', tabindex: '0' } });
     this.olderButton = this.button(this.history, 'Load older messages', () => { void this.loadOlder(); });
     this.olderButton.addClass('raft-load-older');
@@ -1193,30 +1205,31 @@ export class RaftView extends ItemView {
     this.schedulePoll();
   }
 
+  private closeThread(): void {
+    if (!this.thread) return;
+    this.rememberDraft();
+    this.invalidate();
+    this.thread = null;
+    this.resetHistory();
+    this.updateThreadBar();
+    this.restoreDraft();
+    void this.refresh();
+  }
+
   private updateThreadBar(): void {
-    this.threadBar.empty();
-    this.threadBar.hidden = !this.thread;
+    this.threadBack.hidden = !this.thread;
     this.channelSelect.hidden = !!this.thread;
     this.threadTitle.hidden = !this.thread;
+    this.threadTitle.empty();
     this.headerTile.empty();
     setIcon(this.headerTile, this.thread ? 'message-square-reply' : 'hash');
-    if (!this.thread) return;
+    if (!this.thread) { this.threadTitle.title = ''; return; }
     const channel = this.channels.find(item => item.id === this.thread?.parentChannelId);
-    this.threadTitle.setText('Thread');
+    const excerpt = splitNoteContext(this.thread.root.content).text.replace(/\s+/g, ' ').trim();
     if (channel) this.threadTitle.createSpan({ cls: 'raft-thread-channel', text: `#${channel.name}` });
-    const back = this.iconButton(this.threadBar, 'Back to channel', 'arrow-left', () => {
-      this.rememberDraft();
-      this.invalidate();
-      this.thread = null;
-      this.resetHistory();
-      this.updateThreadBar();
-      this.restoreDraft();
-      void this.refresh();
-    });
-    back.addClass('raft-thread-back');
-    const info = this.threadBar.createDiv({ cls: 'raft-thread-context' });
-    info.createSpan({ text: this.thread.root.senderName, cls: 'raft-thread-title' });
-    info.createSpan({ text: splitNoteContext(this.thread.root.content).text.slice(0, 180), cls: 'raft-thread-excerpt' });
+    this.threadTitle.createSpan({ cls: 'raft-thread-title', text: this.thread.root.senderName });
+    if (excerpt) this.threadTitle.createSpan({ cls: 'raft-thread-excerpt', text: excerpt.slice(0, 180) });
+    this.threadTitle.title = [channel ? `#${channel.name}` : '', this.thread.root.senderName, excerpt].filter(Boolean).join(' · ');
   }
 
   private async send(): Promise<void> {

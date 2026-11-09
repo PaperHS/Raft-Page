@@ -65,6 +65,15 @@ export function resolveBinding(bindings: Bindings, path: string, serverId: strin
  * Binds `path` to a channel. A channel has one root on each server, so an older binding of the same channel is
  * dropped; its path is returned so the caller can say what moved.
  */
+
+/** The note or folder bound to `channelId` on this server, when one exists. */
+export function resolveChannelBinding(bindings: Bindings, channelId: string, serverId: string): ResolvedBinding | null {
+  for (const [path, b] of Object.entries(bindings)) {
+    if (b.serverId === serverId && b.channelId === channelId) return { ...b, path, inherited: false };
+  }
+  return null;
+}
+
 export function bind(bindings: Bindings, path: string, binding: Binding): { bindings: Bindings; replaced: string[] } {
   const next: Bindings = {};
   const replaced: string[] = [];

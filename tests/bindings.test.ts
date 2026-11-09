@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { bind, channelName, deleteBindings, folderManifest, parseBindings, renameBindings, resolveBinding, serializeBindings, type Bindings } from '../src/bindings';
+import { bind, channelName, deleteBindings, folderManifest, parseBindings, renameBindings, resolveBinding, resolveChannelBinding, serializeBindings, type Bindings } from '../src/bindings';
 
 const b = (channelId: string, kind: 'file' | 'folder' = 'folder', serverId = 's1') => ({ channelId, channelName: channelId, serverId, kind });
 
@@ -41,4 +41,11 @@ test('a new channel name is suggested from the note title in any script', () => 
   assert.equal(channelName('Trip to Lisbon (draft)'), 'trip-to-lisbon-draft');
   assert.equal(channelName('小票 扫描_方案'), '小票-扫描-方案');
   assert.equal(channelName('  --Hello!!  '), 'hello');
+});
+
+test('a channel finds its bound note or folder on the current server even when another note is open', () => {
+  const bindings: Bindings = { 'product/cq': b('cq'), 'product/note.md': b('note', 'file'), 'other': { ...b('cq'), serverId: 's2' } };
+  assert.deepEqual(resolveChannelBinding(bindings, 'cq', 's1')?.path, 'product/cq');
+  assert.deepEqual(resolveChannelBinding(bindings, 'note', 's1')?.path, 'product/note.md');
+  assert.equal(resolveChannelBinding(bindings, 'missing', 's1'), null);
 });

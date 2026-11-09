@@ -5,7 +5,7 @@ import { RaftView, VIEW_TYPE } from './src/view';
 import { BRIEF_VERSION, QUIET_MS, composeSyncRequest, syncRootMessage, lastSyncedThrough, newActivity, parseNeeds } from './src/sync';
 import { safeNotePath } from './src/edits';
 import { TEMPLATE_FOLDER, fillTemplate, formatDate, mergeProperties, templateTypes } from './src/templates';
-import { BINDINGS_FILE, bind, channelName, deleteBindings, folderManifest, parseBindings, renameBindings, resolveBinding, serializeBindings, unbind, type Bindings, type ResolvedBinding } from './src/bindings';
+import { BINDINGS_FILE, bind, channelName, deleteBindings, folderManifest, parseBindings, renameBindings, resolveBinding, resolveChannelBinding, serializeBindings, unbind, type Bindings, type ResolvedBinding } from './src/bindings';
 import { applyProposalText, composeMessage, hashText, parseProposals, sentDocumentId, sentNote, type DocumentContext, type DocumentSnapshot, type Proposal } from './src/documents';
 
 interface Settings {
@@ -323,6 +323,9 @@ export default class RaftPagePlugin extends Plugin {
   /** The binding that applies to a path (the attached note by default) for the signed-in server. */
   bindingFor(path = this.attachedNote()?.path): ResolvedBinding | null {
     return path && this.session ? resolveBinding(this.bindings, path, this.session.serverId) : null;
+  }
+  channelBinding(channelId = this.settings.channelId): ResolvedBinding | null {
+    return channelId && this.session ? resolveChannelBinding(this.bindings, channelId, this.session.serverId) : null;
   }
   async bindPath(target: TAbstractFile, channel: { id: string; name: string }, steward?: { id: string; name: string } | null) {
     if (!this.session) throw new Error('Sign in to Raft first.');
