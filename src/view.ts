@@ -45,7 +45,7 @@ export class RaftView extends ItemView {
   private status!: HTMLElement;
   private alert!: HTMLElement;
   private channelSelect!: HTMLSelectElement;
-  private headerTile!: HTMLElement;
+  private headerTile!: HTMLButtonElement;
   private threadTitle!: HTMLElement;
   private composer!: HTMLTextAreaElement;
   private keyboardDebug = false;
@@ -60,7 +60,6 @@ export class RaftView extends ItemView {
   private attachButton!: HTMLButtonElement;
   private selectionButton!: HTMLButtonElement;
   private mentionButton!: HTMLButtonElement;
-  private threadBack!: HTMLButtonElement;
   private signOutButton!: HTMLButtonElement;
   private bindButton!: HTMLButtonElement;
   private bindingSource!: HTMLElement;
@@ -456,10 +455,10 @@ export class RaftView extends ItemView {
     this.historyLimited = false;
     this.root = this.contentEl.createDiv({ cls: 'raft-view raft-conversation' });
     const header = this.root.createEl('header', { cls: 'raft-header' });
-    this.threadBack = this.iconButton(header, 'Back to channel', 'arrow-left', () => this.closeThread());
-    this.threadBack.addClass('raft-thread-back');
-    this.threadBack.hidden = true;
-    this.headerTile = header.createSpan({ cls: 'raft-channel-tile', attr: { 'aria-hidden': 'true' } });
+    // In a thread the tile itself is the way back to the channel.
+    this.headerTile = header.createEl('button', { cls: 'raft-channel-tile', attr: { type: 'button', tabindex: '-1', 'aria-hidden': 'true' } });
+    this.headerTile.disabled = true;
+    this.headerTile.addEventListener('click', () => this.closeThread());
     setIcon(this.headerTile, 'hash');
     const titleBox = header.createDiv({ cls: 'raft-header-title' });
     this.channelSelect = titleBox.createEl('select', { cls: 'raft-channel-select' });
@@ -1217,12 +1216,15 @@ export class RaftView extends ItemView {
   }
 
   private updateThreadBar(): void {
-    this.threadBack.hidden = !this.thread;
+    this.headerTile.disabled = !this.thread;
+    this.headerTile.toggleClass('is-back', !!this.thread);
+    if (this.thread) { this.headerTile.removeAttribute('aria-hidden'); this.headerTile.removeAttribute('tabindex'); this.headerTile.setAttribute('aria-label', 'Back to channel'); this.headerTile.title = 'Back to channel'; }
+    else { this.headerTile.setAttribute('aria-hidden', 'true'); this.headerTile.setAttribute('tabindex', '-1'); this.headerTile.removeAttribute('aria-label'); this.headerTile.title = ''; }
     this.channelSelect.hidden = !!this.thread;
     this.threadTitle.hidden = !this.thread;
     this.threadTitle.empty();
     this.headerTile.empty();
-    setIcon(this.headerTile, this.thread ? 'message-square-reply' : 'hash');
+    setIcon(this.headerTile, this.thread ? 'arrow-left' : 'hash');
     if (!this.thread) { this.threadTitle.title = ''; return; }
     const channel = this.channels.find(item => item.id === this.thread?.parentChannelId);
     const excerpt = splitNoteContext(this.thread.root.content).text.replace(/\s+/g, ' ').trim();

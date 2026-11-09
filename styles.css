@@ -51,7 +51,10 @@
 .raft-view .raft-channel-select:hover { background-color: transparent; }
 .raft-thread-heading { display: flex; align-items: baseline; gap: 6px; max-width: 100%; font-size: 14px; line-height: 20px; font-weight: 700; white-space: nowrap; overflow: hidden; }
 .raft-thread-channel { flex-shrink: 0; font-size: 12px; line-height: 16px; font-weight: 600; color: var(--raft-fg-hint); }
-.raft-thread-back { flex-shrink: 0; margin-left: -10px; margin-right: -4px; }
+.raft-view button.raft-channel-tile { padding: 0; min-height: 0; font: inherit; }
+.raft-view button.raft-channel-tile:disabled { cursor: default; opacity: 1; }
+.raft-view button.raft-channel-tile.is-back { cursor: pointer; }
+.raft-view button.raft-channel-tile.is-back:hover { filter: brightness(1.08); }
 .raft-header-actions { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
 .raft-view .raft-icon-button { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 8px; box-shadow: none; background: transparent; color: var(--raft-fg-muted); }
 .raft-view .raft-icon-button svg { width: 18px; height: 18px; }
