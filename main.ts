@@ -5,7 +5,7 @@ import { RaftView, VIEW_TYPE } from './src/view';
 import { BRIEF_VERSION, QUIET_MS, composeSyncRequest, syncRootMessage, lastSyncedThrough, newActivity, parseNeeds } from './src/sync';
 import { safeNotePath } from './src/edits';
 import { TEMPLATE_FOLDER, fillTemplate, formatDate, mergeProperties, templateTypes } from './src/templates';
-import { BINDINGS_FILE, bind, channelName, deleteBindings, folderManifest, parseBindings, renameBindings, resolveBinding, resolveChannelBinding, serializeBindings, unbind, type Bindings, type ResolvedBinding } from './src/bindings';
+import { BINDINGS_FILE, bind, channelName, deleteBindings, folderManifest, parseBindings, renameBindings, resolveBinding, resolveChannelBinding, mergeBindings, serializeBindings, unbind, type Bindings, type ResolvedBinding } from './src/bindings';
 import { applyProposalText, composeMessage, hashText, parseProposals, sentDocumentId, sentNote, type DocumentContext, type DocumentSnapshot, type Proposal } from './src/documents';
 
 interface Settings {
@@ -73,6 +73,7 @@ export default class RaftPagePlugin extends Plugin {
   /** Live agent activity from Raft's `agent:activity` events, by agent id. */
   agentActivity = new Map<string, string>();
   private bindingWrites: Promise<void> = Promise.resolve();
+  private bindingWriteCount = 0;
   /**
    * Notes this account sent from another device (or an earlier session), read from the send messages themselves, so
    * replies to them apply on whichever device is open. Keyed by documentId; the base hash still guards every write.
@@ -300,22 +301,33 @@ export default class RaftPagePlugin extends Plugin {
     catch { /* The base hash still refuses a second apply on another device. */ }
   }
   /** Also called on refresh, so bindings made on another device show up without restarting Obsidian. */
-  async loadBindings() {
+  async loadBindings(quiet = false) {
     const adapter = this.app.vault.adapter, path = this.bindingsPath();
     await this.bindingWrites.catch(() => {});
     try {
-      if (adapter && await adapter.exists(path)) this.bindings = parseBindings(await adapter.read(path));
-    } catch { new Notice(`Raft: ${path} could not be read. Channel bindings are off until it is fixed.`); }
+      if (!adapter || !await adapter.exists(path)) return;
+      const next = parseBindings(await adapter.read(path));
+      const changed = serializeBindings(next) !== serializeBindings(this.bindings);
+      this.bindings = next;
+      if (changed && quiet) this.views().forEach(v => { v.updateContext(); v.followNote(); });
+    } catch { if (!quiet) new Notice(`Raft: ${path} could not be read. Channel bindings are off until it is fixed.`); }
   }
   /** Writes are queued so a rename that lands during a bind cannot lose either change. */
   saveBindings(next: Bindings): Promise<void> {
+    const before = this.bindings;
     this.bindings = next;
+    const write = ++this.bindingWriteCount;
     this.bindingWrites = this.bindingWrites.catch(() => {}).then(async () => {
       const adapter = this.app.vault.adapter;
       if (!adapter) return;
       const path = this.bindingsPath(), folder = path.slice(0, path.lastIndexOf('/'));
       if (!await adapter.exists(folder)) await adapter.mkdir(folder);
-      await adapter.write(path, serializeBindings(this.bindings));
+      // Another device may have changed the file since we read it: write only our own change on top of it.
+      let disk: Bindings = before;
+      try { if (await adapter.exists(path)) disk = parseBindings(await adapter.read(path)); } catch { /* Unreadable: fall back to ours. */ }
+      const merged = mergeBindings(before, next, disk);
+      await adapter.write(path, serializeBindings(merged));
+      if (write === this.bindingWriteCount) this.bindings = merged;
     });
     this.views().forEach(v => v.updateContext());
     return this.bindingWrites;
@@ -438,6 +450,8 @@ export default class RaftPagePlugin extends Plugin {
 
   /** Every 30 seconds: for each binding with a steward, answer its file requests and ask it to sync once the channel is quiet. */
   async syncTick(force?: string) {
+    // Pick up bindings made on other devices (the file arrives through vault sync) without a manual refresh.
+    if (!force) await this.loadBindings(true);
     if ((this.syncing && Date.now() - this.syncing < SYNC_STALL_MS) || !this.session || !this.active) return;
     const started = this.syncing = Date.now(), requestsBefore = this.requestCount;
     const steps: Record<string, number> = {}, failures: string[] = [];

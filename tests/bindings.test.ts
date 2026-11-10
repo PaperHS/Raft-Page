@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { bind, channelName, deleteBindings, folderManifest, parseBindings, renameBindings, resolveBinding, resolveChannelBinding, serializeBindings, type Bindings } from '../src/bindings';
+import { bind, channelName, deleteBindings, folderManifest, parseBindings, renameBindings, resolveBinding, resolveChannelBinding, mergeBindings, serializeBindings, type Bindings } from '../src/bindings';
 
 const b = (channelId: string, kind: 'file' | 'folder' = 'folder', serverId = 's1') => ({ channelId, channelName: channelId, serverId, kind });
 
@@ -48,4 +48,16 @@ test('a channel finds its bound note or folder on the current server even when a
   assert.deepEqual(resolveChannelBinding(bindings, 'cq', 's1')?.path, 'product/cq');
   assert.deepEqual(resolveChannelBinding(bindings, 'note', 's1')?.path, 'product/note.md');
   assert.equal(resolveChannelBinding(bindings, 'missing', 's1'), null);
+});
+
+test('a device with an old copy writes only its own change, keeping bindings another device added', () => {
+  const before: Bindings = { A: b('a'), B: b('b') };
+  const disk: Bindings = { A: b('a'), B: b('b'), Phone: b('phone') };
+  // This device binds C and unbinds B; the phone meanwhile added Phone.
+  const after: Bindings = { A: b('a'), C: b('c') };
+  assert.deepEqual(Object.keys(mergeBindings(before, after, disk)).sort(), ['A', 'C', 'Phone']);
+  // Changing a steward updates only that entry.
+  const steward = { ...b('a'), stewardId: 's', stewardName: 'scribe' };
+  assert.equal(mergeBindings(before, { ...before, A: steward }, disk).A.stewardId, 's');
+  assert.ok(mergeBindings(before, { ...before, A: steward }, disk).Phone);
 });

@@ -45,6 +45,19 @@ export function parseBindings(text: string): Bindings {
   return out;
 }
 
+/**
+ * Applies the change from `before` to `after` onto the bindings now on disk, so a device whose copy is out of date
+ * (another device bound or unbound something meanwhile) only writes what it changed instead of its whole stale list.
+ */
+export function mergeBindings(before: Bindings, after: Bindings, disk: Bindings): Bindings {
+  const out: Bindings = { ...disk };
+  for (const path of Object.keys(before)) if (!(path in after)) delete out[path];
+  for (const [path, value] of Object.entries(after)) {
+    if (JSON.stringify(before[path]) !== JSON.stringify(value)) out[path] = value;
+  }
+  return out;
+}
+
 export function serializeBindings(bindings: Bindings): string {
   const sorted = Object.fromEntries(Object.entries(bindings).sort(([a], [b]) => a.localeCompare(b)));
   return JSON.stringify({ version: 1, bindings: sorted }, null, 2) + '\n';
