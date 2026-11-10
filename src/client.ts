@@ -561,16 +561,22 @@ export class RaftClient {
 
   /** Uploads a text file to Raft's attachment storage for the channel and returns its attachment ID. */
   async uploadText(channelId: string, filename: string, text: string, mimeType = "text/markdown"): Promise<string> {
-    requiredInput(channelId, "channel ID");
     if (!text) throw new RaftClientError("INVALID_INPUT", "Raft does not accept empty files.");
+    return this.uploadFile(channelId, filename, new TextEncoder().encode(text).buffer as ArrayBuffer, `${mimeType}; charset=utf-8`);
+  }
+
+  /** Uploads any file (image, video, document) to the channel's attachment storage and returns its attachment ID. */
+  async uploadFile(channelId: string, filename: string, bytes: ArrayBuffer, mimeType = "application/octet-stream"): Promise<string> {
+    requiredInput(channelId, "channel ID");
+    if (!bytes.byteLength) throw new RaftClientError("INVALID_INPUT", "Raft does not accept empty files.");
     // Same shape as a browser FormData post: raw UTF-8 filename, channelId before the file.
     const boundary = `----raft-page-${globalThis.crypto.randomUUID()}`;
     const safeName = filename.replace(/["\r\n\\]/g, "_");
     const encoder = new TextEncoder();
     const head = encoder.encode(`--${boundary}\r\nContent-Disposition: form-data; name="channelId"\r\n\r\n${channelId}\r\n` +
       `--${boundary}\r\nContent-Disposition: form-data; name="files"; filename="${safeName}"\r\n` +
-      `Content-Type: ${mimeType}; charset=utf-8\r\n\r\n`);
-    const file = encoder.encode(text), tail = encoder.encode(`\r\n--${boundary}--\r\n`);
+      `Content-Type: ${mimeType.replace(/[\r\n]/g, "") || "application/octet-stream"}\r\n\r\n`);
+    const file = new Uint8Array(bytes), tail = encoder.encode(`\r\n--${boundary}--\r\n`);
     const data = new Uint8Array(head.length + file.length + tail.length);
     data.set(head); data.set(file, head.length); data.set(tail, head.length + file.length);
     const payload = object(await this.authenticated("POST", "/api/attachments/upload",

@@ -203,6 +203,15 @@
 .raft-view textarea.raft-composer::placeholder { color: var(--raft-fg-hint); }
 .raft-view textarea.raft-composer:focus { box-shadow: none; }
 .raft-composer-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.raft-file-tray { display: flex; flex-wrap: wrap; gap: 6px; }
+.raft-file-tray[hidden] { display: none; }
+.raft-file-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 220px; height: 40px; padding: 0 4px 0 4px; border-radius: 8px; border: 1px solid var(--raft-line-hairline); background: var(--raft-fill-muted); color: var(--raft-fg); font-size: 12px; }
+.raft-file-chip img { width: 32px; height: 32px; object-fit: cover; border-radius: 6px; flex-shrink: 0; }
+.raft-file-chip .raft-chip-icon svg { width: 16px; height: 16px; }
+.raft-file-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.raft-view .raft-file-chip .raft-chip-close { width: 20px; height: 20px; flex-shrink: 0; border-radius: 4px; }
+.raft-view .raft-file-chip .raft-chip-close svg { width: 12px; height: 12px; }
+.raft-composer-box.is-dropping { border-style: dashed; border-color: var(--raft-brand); }
 .raft-composer-tools { display: flex; align-items: center; gap: 2px; margin-left: -5px; }
 .raft-view .raft-icon-button.raft-send { border: 1.5px solid #141111; background: var(--raft-attention); color: #141111; box-shadow: 0 0 0 1.5px var(--raft-sticker-edge); }
 .raft-view .raft-icon-button.raft-send:hover:not(:disabled) { background: linear-gradient(rgba(20, 17, 17, .08), rgba(20, 17, 17, .08)), var(--raft-attention); color: #141111; }

@@ -236,6 +236,19 @@ test("uploadText posts the same multipart shape as Raft web and sends attachment
   await assert.rejects(h.client.uploadText("c1", "a.md", ""), errorCode("INVALID_INPUT"));
 });
 
+test("uploadFile sends binary bytes unchanged with their own content type", async () => {
+  const id = "00000000-0000-4000-8000-000000000002";
+  const h = harness([{ status: 200, json: { attachments: [{ id }] } }]);
+  const bytes = new Uint8Array([0, 255, 137, 80, 78, 71, 13, 10]);
+  assert.equal(await h.client.uploadFile("c1", "shot.png", bytes.buffer, "image/png"), id);
+  const raw = new Uint8Array(h.requests[0].rawBody!);
+  const text = new TextDecoder("latin1").decode(raw);
+  assert.match(text, /filename="shot.png"\r\nContent-Type: image\/png\r\n\r\n/);
+  const start = text.indexOf("image/png\r\n\r\n") + "image/png\r\n\r\n".length;
+  assert.deepEqual([...raw.slice(start, start + bytes.length)], [...bytes]);
+  await assert.rejects(h.client.uploadFile("c1", "e.png", new ArrayBuffer(0)), errorCode("INVALID_INPUT"));
+});
+
 test("refresh failure is explicit, attempted once, and preserves the session", async () => {
   const h = harness([
     { status: 401, json: { error: "access-secret" } },

@@ -8,6 +8,9 @@ import { isCustomAvatar, pixelAvatarUrl } from './avatar';
 export const VIEW_TYPE = 'raft-page';
 const PAGE_SIZE = 50;
 const POLL_MS = 3000;
+/** Raft's limits (free plan): 50 MB per file, 10 attachments per message, the attached note included. */
+const MAX_FILE_BYTES = 50 * 1048576;
+const MAX_ATTACHMENTS = 10;
 
 type ChannelMember = Member;
 type Thread = { root: Message; channelId: string | null; parentChannelId: string };
@@ -58,6 +61,10 @@ export class RaftView extends ItemView {
   private contextChip!: HTMLElement;
   private contextScope!: HTMLElement;
   private attachButton!: HTMLButtonElement;
+  private fileButton!: HTMLButtonElement;
+  private fileInput!: HTMLInputElement;
+  private fileTray!: HTMLElement;
+  private pendingFiles: { file: File; url?: string }[] = [];
   private selectionButton!: HTMLButtonElement;
   private mentionButton!: HTMLButtonElement;
   private signOutButton!: HTMLButtonElement;
@@ -195,6 +202,8 @@ export class RaftView extends ItemView {
     this.invalidate();
     this.contentEl.empty();
     for (const pending of this.images.values()) void pending.then(url => { if (url) URL.revokeObjectURL(url); });
+    for (const item of this.pendingFiles) if (item.url) URL.revokeObjectURL(item.url);
+    this.pendingFiles = [];
     this.images.clear();
   }
 
@@ -502,10 +511,29 @@ export class RaftView extends ItemView {
     const detach = this.iconButton(this.contextChip, 'Detach note', 'x', () => this.setAttach(false));
     detach.addClass('raft-chip-close');
     this.contextDescription = box.createDiv({ cls: 'raft-visually-hidden' });
+    this.fileTray = box.createDiv({ cls: 'raft-file-tray' });
+    this.fileTray.hidden = true;
+    this.fileInput = box.createEl('input', { type: 'file', attr: { multiple: '', hidden: '' } });
+    this.fileInput.addEventListener('change', () => { this.addFiles(Array.from(this.fileInput.files ?? [])); this.fileInput.value = ''; });
+    box.addEventListener('dragover', event => { if (event.dataTransfer?.types.includes('Files')) { event.preventDefault(); box.addClass('is-dropping'); } });
+    box.addEventListener('dragleave', () => box.removeClass('is-dropping'));
+    box.addEventListener('drop', event => {
+      box.removeClass('is-dropping');
+      const dropped = Array.from(event.dataTransfer?.files ?? []);
+      if (!dropped.length) return;
+      event.preventDefault();
+      this.addFiles(dropped);
+    });
     this.composer = box.createEl('textarea', { cls: 'raft-composer', attr: { 'aria-label': 'Message', rows: '1' } });
     this.composer.value = this.drafts.get(this.draftKey()) || '';
     this.composer.addEventListener('input', () => { this.rememberDraft(); this.autosize(); this.updateMentions(); this.updateControls(); });
     this.composer.addEventListener('click', () => this.updateMentions());
+    this.composer.addEventListener('paste', event => {
+      const pasted = Array.from(event.clipboardData?.files ?? []);
+      if (!pasted.length) return;
+      event.preventDefault();
+      this.addFiles(pasted);
+    });
     this.composer.addEventListener('blur', () => { window.setTimeout(() => this.closeMentions(), 120); });
     this.composer.addEventListener('keydown', event => {
       if (this.handleMentionKey(event)) return;
@@ -523,11 +551,55 @@ export class RaftView extends ItemView {
       void this.savePreferences();
     });
     this.mentionButton = this.iconButton(left, 'Mention someone', 'at-sign', () => this.insertAtCursor('@'));
+    this.fileButton = this.iconButton(left, 'Add images, videos or files', 'image-plus', () => this.fileInput.click());
     this.sendButton = this.iconButton(toolbar, 'Send', 'send-horizontal', () => { void this.send(); });
     this.sendButton.addClass('raft-send');
     this.updateContext();
     this.updateControls();
     this.autosize();
+  }
+
+  /** Files waiting to be sent with the next message, shown as removable chips (images as thumbnails). */
+  private addFiles(files: File[]): void {
+    const tooBig = files.filter(f => f.size > MAX_FILE_BYTES);
+    const room = MAX_ATTACHMENTS - (this.plugin.settings.attachDocument ? 1 : 0);
+    let skipped = 0;
+    for (const file of files) if (file.size > 0 && file.size <= MAX_FILE_BYTES) {
+      if (this.pendingFiles.length >= room) { skipped++; continue; }
+      this.pendingFiles.push({ file, url: file.type.startsWith('image/') ? URL.createObjectURL(file) : undefined });
+    }
+    const problems = [
+      tooBig.length ? `${tooBig.map(f => f.name).join(', ')}: Raft accepts files up to ${MAX_FILE_BYTES / 1048576} MB.` : '',
+      skipped ? `A message can carry at most ${MAX_ATTACHMENTS} files${room < MAX_ATTACHMENTS ? ', including the attached note' : ''}; ${skipped} not added.` : '',
+    ].filter(Boolean);
+    this.alert.empty();
+    if (problems.length) this.alert.setText(problems.join(' '));
+    this.renderFiles();
+  }
+
+  private clearFiles(): void {
+    for (const item of this.pendingFiles) if (item.url) URL.revokeObjectURL(item.url);
+    this.pendingFiles = [];
+    this.renderFiles();
+  }
+
+  private renderFiles(): void {
+    this.fileTray.empty();
+    this.fileTray.hidden = !this.pendingFiles.length;
+    this.pendingFiles.forEach((item, index) => {
+      const chip = this.fileTray.createDiv({ cls: 'raft-file-chip', attr: { title: item.file.name } });
+      if (item.url) chip.createEl('img', { attr: { src: item.url, alt: '' } });
+      else setIcon(chip.createSpan({ cls: 'raft-chip-icon', attr: { 'aria-hidden': 'true' } }), item.file.type.startsWith('video/') ? 'film' : 'file');
+      chip.createSpan({ cls: 'raft-file-name', text: item.file.name });
+      const remove = this.iconButton(chip, `Remove ${item.file.name}`, 'x', () => {
+        if (this.sending) return;
+        const [gone] = this.pendingFiles.splice(index, 1);
+        if (gone?.url) URL.revokeObjectURL(gone.url);
+        this.renderFiles();
+      });
+      remove.addClass('raft-chip-close');
+    });
+    this.updateControls();
   }
 
   private setAttach(value: boolean): void {
@@ -1237,7 +1309,8 @@ export class RaftView extends ItemView {
   private async send(): Promise<void> {
     const text = this.composer?.value || '';
     const channel = this.plugin.settings.channelId;
-    if (!text.trim() || !channel || !this.plugin.session || this.sending || this.catalogLoading) return;
+    const pending = [...this.pendingFiles];
+    if ((!text.trim() && !pending.length) || !channel || !this.plugin.session || this.sending || this.catalogLoading) return;
     const token = this.epoch;
     const key = this.draftKey();
     const thread = this.thread;
@@ -1247,10 +1320,12 @@ export class RaftView extends ItemView {
     this.updateControls();
     try {
       // Recipients are @mentioned in the text itself, as in Raft.
+      const files = await Promise.all(pending.map(async ({ file }) => ({ name: file.name || 'pasted-file', type: file.type, data: await file.arrayBuffer() })));
       await this.plugin.send(thread?.parentChannelId || channel, '', text,
-        this.plugin.settings.attachDocument, this.plugin.settings.useSelection, thread?.root.id);
+        this.plugin.settings.attachDocument, this.plugin.settings.useSelection, thread?.root.id, files);
       if (this.drafts.get(key) === text) this.drafts.delete(key);
       if (!this.isCurrent(token)) return;
+      if (pending.length) this.clearFiles();
       if (this.composer.value === text) { this.composer.value = ''; this.autosize(); }
       if (thread && !thread.channelId) {
         try {
@@ -1318,12 +1393,13 @@ export class RaftView extends ItemView {
   private updateControls(): void {
     if (!this.sendButton) return;
     const busy = this.sending || this.catalogLoading || this.authenticating;
-    this.sendButton.disabled = busy || !this.plugin.session || !this.plugin.settings.channelId || !this.composer.value.trim();
+    this.sendButton.disabled = busy || !this.plugin.session || !this.plugin.settings.channelId || (!this.composer.value.trim() && !this.pendingFiles.length);
     this.sendButton.setAttribute('aria-label', this.sending ? 'Sending…' : this.thread ? 'Send reply' : 'Send');
     this.sendButton.title = this.sendButton.getAttribute('aria-label') || '';
     this.composer.disabled = this.authenticating || !this.plugin.session;
     this.channelSelect.disabled = busy || !this.channels.length;
     this.attachButton.disabled = this.sending;
+    if (this.fileButton) this.fileButton.disabled = this.sending;
     this.selectionButton.disabled = this.sending || !this.plugin.settings.attachDocument;
     const channel = this.channels.find(item => item.id === this.plugin.settings.channelId);
     this.composer.placeholder = this.thread ? 'Reply in thread…' : channel ? `Message #${channel.name}` : 'Message';

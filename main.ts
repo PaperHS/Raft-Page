@@ -711,7 +711,8 @@ export default class RaftPagePlugin extends Plugin {
     const file = this.capturedFiles.get(context);
     if (!file || file.path !== context.path || this.app.vault.getAbstractFileByPath(context.path) !== file) throw new Error('The attached note was moved or deleted. Please try again.');
   }
-  async send(channelId: string, agent: string, text: string, attach: boolean, useSelection: boolean, threadParentId?: string) {
+  async send(channelId: string, agent: string, text: string, attach: boolean, useSelection: boolean, threadParentId?: string,
+    files: { name: string; type: string; data: ArrayBuffer }[] = []) {
     if (!this.session) throw new Error('Sign in to Raft first.');
     const generation = this.generation, identity = this.identity(this.session), owner = this.session;
     const context = attach ? await this.captureDocument(useSelection) : null;
@@ -744,9 +745,18 @@ export default class RaftPagePlugin extends Plugin {
       this.assertSession(generation, identity);
       this.assertCaptured(context);
     }
+    // Pasted or chosen files (images, videos, documents) travel as ordinary Raft attachments.
+    const fileIds: string[] = [];
+    for (const file of files) {
+      fileIds.push(await this.client.uploadFile(target, file.name, file.data, file.type || 'application/octet-stream'));
+      this.assertSession(generation, identity);
+    }
+    // Raft needs some text; a files-only message names what it carries.
+    const body = text.trim() ? text : files.map(f => `📎 ${f.name}`).join('\n');
     const binding = context ? this.bindingFor(context.path) : null;
-    const sent = await this.client.send(target, composeMessage(agent, text, context, !!attachmentId, binding?.kind === 'folder' ? binding.path : undefined),
-      undefined, attachmentId ? [attachmentId] : undefined);
+    const ids = [...(attachmentId ? [attachmentId] : []), ...fileIds];
+    const sent = await this.client.send(target, composeMessage(agent, body, context, !!attachmentId, binding?.kind === 'folder' ? binding.path : undefined),
+      undefined, ids.length ? ids : undefined);
     if (target !== channelId) this.threadParents.set(target, channelId);
     if (sent.unresolvedMentionHandles?.length || sent.pendingMentionActions?.length || sent.deliveryWarnings?.length) {
       new Notice('Message sent, but Raft reports that the mention may not have reached the agent. Check the channel in Raft.', 12000);

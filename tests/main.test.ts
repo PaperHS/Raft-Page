@@ -457,6 +457,26 @@ test('attached notes travel as an uploaded file and the message keeps only a sho
   assert.match(sends[1][1], /full text below[\s\S]*```markdown\noriginal\n```$/);
 });
 
+test('pasted images and other files are uploaded to the reply target and sent as attachments, even without text', async () => {
+  const f = await fixture();
+  const uploads: any[] = [], sends: any[] = [];
+  f.plugin.client.ensureThread = async () => 'thread-ch';
+  f.plugin.client.uploadFile = async (...args: any[]) => { uploads.push(args); return `file-${uploads.length}`; };
+  f.plugin.client.send = async (...args: any[]) => { sends.push(args); return {}; };
+  const png = new Uint8Array([137, 80, 78, 71]).buffer;
+  await f.plugin.send('channel-a', '', 'look', false, false, undefined, [{ name: 'shot.png', type: 'image/png', data: png }, { name: 'clip.mov', type: '', data: png }]);
+  assert.deepEqual(uploads.map(u => [u[0], u[1], u[3]]), [['channel-a', 'shot.png', 'image/png'], ['channel-a', 'clip.mov', 'application/octet-stream']]);
+  assert.deepEqual(sends[0][3], ['file-1', 'file-2']);
+  assert.equal(sends[0][1], 'look');
+  await f.plugin.send('channel-a', '', '  ', false, false, 'root', [{ name: 'shot.png', type: 'image/png', data: png }]);
+  assert.equal(uploads[2][0], 'thread-ch', 'a thread reply uploads into the thread');
+  assert.equal(sends[1][1], '📎 shot.png', 'a files-only message names its files');
+  // A failed upload stops the send instead of posting without the file.
+  f.plugin.client.uploadFile = async () => { throw new Error('too large'); };
+  await assert.rejects(f.plugin.send('channel-a', '', 'x', false, false, undefined, [{ name: 'a.png', type: 'image/png', data: png }]), /too large/);
+  assert.equal(sends.length, 2);
+});
+
 test('two edit blocks in one message can independently update two original notes', async () => {
   const f = await fixture(false);
   const second = new TFile('Notes/Second.md'); f.files.set(second.path, second); f.disk.set(second, 'original');
