@@ -65,9 +65,15 @@ Other forms:
 
 - New note in a bound folder: `{"path": "folder/new-topic.md", "create": true, "content": "# New topic\n\n…"}`
 - Whole note (only when most of it changes): `{"path": "…", "baseHash": "…", "content": "<complete note>"}`
+- Empty (0-byte) note: the same whole-note form, with the hash listed for it.
 
-Use the `baseHash` from the request (the 12-character short hash is enough). If the note changed since, Raft Page refuses the edit and shows it to the
-user as a card instead.
+Use the `baseHash` from the request (the 12-character short hash is enough); never compute or guess one. Each block holds one
+valid JSON object: inside strings, write line breaks as `\n` and quotes as `\"`.
+
+Raft Page answers every edit message with a 🧾 Edit receipt in the same conversation: ✅ with each saved note's new sha256 (use
+it as the next `baseHash`), or, mentioning you, each block that was not saved with the reason (broken JSON, missing hash, the
+note changed since, a path outside the binding) and the formats to use. Fix those blocks and send them again. A note is
+recorded only once its ✅ arrives.
 
 ## How to write
 
