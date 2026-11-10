@@ -9,9 +9,11 @@ export const QUIET_MS = 2 * 60_000;
 const SYNC_BLOCK = /^```raft-sync\s*\r?\n([\s\S]*?)^```\s*$/m;
 const NEED_BLOCK = /^```raft-need\s*\r?\n([\s\S]*?)^```\s*$/gm;
 export const BIND_NOTICE = '📁 This channel is now bound to the Obsidian';
+/** Opens the plugin's answer to a steward's edits; like sync requests, it is not conversation to record. */
+export const EDIT_RECEIPT = '🧾 Edit receipt';
 
 /** Bumped when the brief changes, so bindings start a fresh sync thread that carries the new one. */
-export const BRIEF_VERSION = 6;
+export const BRIEF_VERSION = 7;
 
 /**
  * The steward's instructions. They open the sync thread, and Raft shows a thread's first message with every reply it
@@ -20,7 +22,8 @@ export const BRIEF_VERSION = 6;
 export function syncRootMessage(binding: string, steward: string, channel: string): string {
   return [
     `📝 Document sync for \`${binding}\` (#${channel}) · steward @${steward}`,
-    `@${steward}: keep these notes in step with what #${channel} decides. For each request, read the listed messages and record only decisions, changed requirements, corrections and to-dos (📌 = must record, 🚫 = never). Nothing to record → do not reply. Otherwise reply with one summary line and, per note, a code block fenced as \`\`\`raft-edit (not json) containing \`{"path","baseHash","ops":[…]}\` with ops \`append\`/\`replace_section\` {heading, content} or \`replace\` {find, with}, each matching one place; new note: \`{"path","create":true,"content"}\`. Need a note's text → \`\`\`raft-need block \`{"paths":[…]}\`. Reads and edits work here and in #${channel} or its threads; read replies stay in a thread. Before discussing or editing, obtain current text and hash from attachments or raft-need. Missing or stale cache → request again before asking the user to re-upload; never guess contents or hashes. Paths are vault-relative, not local filesystem paths. Confirm the response before claiming success.`,
+    `@${steward}: keep these notes in step with what #${channel} decides. For each request, read the listed messages and record only decisions, changed requirements, corrections and to-dos (📌 = must record, 🚫 = never). Nothing to record → do not reply. Otherwise reply with one summary line and, per note, one code block fenced as \`\`\`raft-edit (not json) holding one valid JSON object. Need a note's text → \`\`\`raft-need block \`{"paths":[…]}\`. Reads and edits work here and in #${channel} or its threads; read replies stay in a thread. Paths are vault-relative (\`${binding}/…\`), never local filesystem paths.`,
+    `Edit formats: change part of a note \`{"path","baseHash","ops":[…]}\` with ops \`{"op":"append","content","heading"?}\`, \`{"op":"replace_section","heading","content"}\` or \`{"op":"replace","find","with"}\` (find copied exactly from the note, matching one place); rewrite a whole note \`{"path","baseHash","content"}\`; an empty (0-byte) note is written the same way, with its listed hash and the full text as content; a note that does not exist yet \`{"path","create":true,"content"}\` with no baseHash. baseHash is the sha256 the plugin listed for that note — copy it, never compute or guess it; missing or stale → ask with raft-need first. Inside JSON strings write line breaks as \\n and quotes as \\". The plugin answers every edit: ✅ with the note's new sha256 (use it as the next baseHash), or a reason it was not saved — fix that block and send it again. Never report a note as recorded before its ✅.`,
     `Writing (vault _templates/文档规范.md): keep the YAML properties and set \`updated\` to today; fix the paragraph that is wrong instead of appending corrections; give facts a source link and mark unchecked ones 未核实; say who decided, with the message link; add one line per change under 变更记录. A new note starts with properties type (项目/调研/决策/现状/内容稿/知识), status, owner, tags [doc/<type>, …] and summary.`,
   ].join('\n');
 }
@@ -48,7 +51,7 @@ export function lastSyncedThrough(messages: Message[], binding: string): number 
 
 /** Sync thread openers and requests (also ones older versions posted in the channel) are not conversation. */
 export function isSyncMessage(content: string): boolean {
-  return content.startsWith('📝 Document sync for') || SYNC_BLOCK.test(content);
+  return content.startsWith('📝 Document sync for') || content.startsWith(EDIT_RECEIPT) || SYNC_BLOCK.test(content);
 }
 
 /** Paths the steward asked for with a `raft-need` block. */
@@ -98,7 +101,7 @@ export function newActivity(messages: Message[], summaries: Record<string, Threa
     }
     const summary = summaries?.[message.id] ?? message.threadSummary;
     const replied = time(summary?.lastReplyAt);
-    const byOthers = summary?.latestReplies?.some(r => r.senderId !== skip.stewardId) ?? true;
+    const byOthers = summary?.latestReplies?.some(r => r.senderId !== skip.stewardId && !r.preview?.startsWith(EDIT_RECEIPT)) ?? true;
     if (replied > since && byOthers) {
       result.threads.push(message.id);
       result.latest = Math.max(result.latest, replied);

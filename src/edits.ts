@@ -13,7 +13,7 @@ export function parseOps(value: unknown): EditOp[] | null {
   const ops: EditOp[] = [];
   for (const raw of value) {
     const o = raw as Record<string, unknown>;
-    if (o?.op === 'replace' && typeof o.find === 'string' && o.find && typeof o.with === 'string') ops.push({ op: 'replace', find: o.find, with: o.with });
+    if (o?.op === 'replace' && typeof o.find === 'string' && typeof o.with === 'string') ops.push({ op: 'replace', find: o.find, with: o.with });
     else if (o?.op === 'replace_section' && typeof o.heading === 'string' && o.heading.trim() && typeof o.content === 'string') ops.push({ op: 'replace_section', heading: o.heading, content: o.content });
     else if (o?.op === 'append' && typeof o.content === 'string' && (o.heading === undefined || typeof o.heading === 'string')) ops.push({ op: 'append', heading: o.heading as string | undefined, content: o.content });
     else return null;
@@ -54,6 +54,12 @@ const bodyLines = (content: string) => content.replace(/^\n+|\s+$/g, '').split('
 export function applyOps(text: string, ops: EditOp[]): string {
   for (const op of ops) {
     if (op.op === 'replace') {
+      // An empty find has nothing to match, except on an empty note, where it means "write this text".
+      if (!op.find) {
+        if (text.trim()) throw new Error('An empty "find" only works on an empty note. Use append, replace_section, or a find copied from the note.');
+        text = op.with;
+        continue;
+      }
       const first = text.indexOf(op.find);
       if (first < 0) throw new Error('A text to replace was not found.');
       if (text.indexOf(op.find, first + 1) >= 0) throw new Error('A text to replace appears more than once.');

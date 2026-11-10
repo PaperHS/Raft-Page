@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { applyOps, parseOps, safeNotePath } from '../src/edits';
-import { applyProposalText, parseProposals, splitEditBlocks } from '../src/documents';
+import { applyProposalText, examineEditBlocks, parseProposals, splitEditBlocks } from '../src/documents';
 
 const doc = '# Plan\n\nIntro.\n\n## 1. Goals\n\nOld goals.\n\n### 1.1 Detail\n\nDeep.\n\n## 2. Todo\n\n- a\n\n```\n## 1. Goals\n```\n';
 
@@ -54,4 +54,36 @@ test('edit blocks fenced as json (or unlabelled) count when shaped like an edit;
   const split = splitEditBlocks(content);
   assert.equal(split.blocks.length, 2);
   assert.ok(split.text.includes('{"theme": "dark"}') && !split.text.includes('p/x.md'));
+});
+
+test('an empty find writes an empty note and is refused on a note with text', () => {
+  assert.deepEqual(parseOps([{ op: 'replace', find: '', with: '# Filled' }]), [{ op: 'replace', find: '', with: '# Filled' }]);
+  assert.equal(applyOps('', [{ op: 'replace', find: '', with: '# Filled' }]), '# Filled');
+  assert.equal(applyOps('\n', [{ op: 'replace', find: '', with: '# Filled' }]), '# Filled');
+  assert.throws(() => applyOps('text', [{ op: 'replace', find: '', with: 'x' }]), /only works on an empty note/);
+});
+
+test('edit blocks that cannot be used come back as problems with the reason, in message order', () => {
+  const hash = 'c'.repeat(64);
+  const content = [
+    'Summary line.',
+    '```raft-edit\n{"path":"p/a.md","baseHash":"' + hash + '","content":"line one\nline two"}\n```',
+    '```raft-edit\n' + JSON.stringify({ path: 'p/b.md', content: 'no hash' }) + '\n```',
+    '```raft-edit\n' + JSON.stringify({ path: 'p/c.md', baseHash: hash, ops: [{ op: 'insert', text: 'x' }] }) + '\n```',
+    '```raft-edit\n' + JSON.stringify({ path: 'p/d.md', create: true }) + '\n```',
+    '```raft-edit\n' + JSON.stringify({ path: '/Users/me/vault/p/e.md', baseHash: hash, content: 'x' }) + '\n```',
+    '```raft-edit\n' + JSON.stringify({ path: 'p/ok.md', baseHash: hash, content: 'fine' }) + '\n```',
+    '```json\n{"theme": "dark"}\n```',
+    '```json\n{"path": "p/f.md", "content": "broken\n"}\n```',
+  ].join('\n');
+  const { proposals, problems, position } = examineEditBlocks(content, 'm', 'agent');
+  assert.deepEqual(proposals.map(p => p.path), ['p/ok.md']);
+  assert.equal(position.get('m:5'), 6);
+  assert.deepEqual(problems.map(p => [p.index, p.path]), [[1, 'p/a.md'], [2, 'p/b.md'], [3, 'p/c.md'], [4, 'p/d.md'], [5, '/Users/me/vault/p/e.md'], [8, 'p/f.md']]);
+  assert.match(problems[0].reason, /Not valid JSON.*\\n/);
+  assert.match(problems[1].reason, /baseHash is missing.*create":true/);
+  assert.match(problems[2].reason, /ops must be/);
+  assert.match(problems[3].reason, /A new note is/);
+  assert.match(problems[4].reason, /vault-relative/);
+  assert.deepEqual(parseProposals(content, 'm', 'agent'), proposals);
 });

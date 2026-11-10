@@ -2,11 +2,11 @@ import { Plugin, ItemView, WorkspaceLeaf, MarkdownView, TFile, TFolder, Notice, 
 import { io, type Socket } from 'socket.io-client';
 import { RaftClient, RaftClientError, type Session, type Message, type ServerInfo } from './src/client';
 import { RaftView, VIEW_TYPE } from './src/view';
-import { BRIEF_VERSION, QUIET_MS, composeSyncRequest, syncRootMessage, lastSyncedThrough, newActivity, parseNeeds } from './src/sync';
+import { BRIEF_VERSION, EDIT_RECEIPT, QUIET_MS, composeSyncRequest, syncRootMessage, lastSyncedThrough, newActivity, parseNeeds } from './src/sync';
 import { safeNotePath } from './src/edits';
 import { TEMPLATE_FOLDER, fillTemplate, formatDate, mergeProperties, templateTypes } from './src/templates';
 import { BINDINGS_FILE, bind, channelName, deleteBindings, folderManifest, parseBindings, renameBindings, resolveBinding, resolveChannelBinding, mergeBindings, serializeBindings, unbind, type Bindings, type ResolvedBinding } from './src/bindings';
-import { applyProposalText, composeMessage, hashText, parseProposals, sentDocumentId, sentNote, type DocumentContext, type DocumentSnapshot, type Proposal } from './src/documents';
+import { applyProposalText, composeMessage, examineEditBlocks, hashText, parseProposals, sentDocumentId, sentNote, type DocumentContext, type DocumentSnapshot, type Proposal } from './src/documents';
 
 interface Settings {
   apiUrl: string; serverId: string; serverSlug: string; channelId: string; agent: string;
@@ -32,6 +32,9 @@ type RemoteDoc = { path: string; baseHash: string; channelId: string; createdAt:
 const REQUEST_TIMEOUT_MS = 60_000;
 const SYNC_STALL_MS = 15 * 60_000;
 const needMarker = (requestId: string) => `\n\n[raft-need]: <> '${requestId}'`;
+const editMarker = (messageId: string) => `\n\n[raft-edit]: <> '${messageId}'`;
+/** Another device may still be writing an edit; this device reports its own failure only after this long. */
+const EDIT_FAILURE_GRACE_MS = 60_000;
 
 export default class RaftPagePlugin extends Plugin {
   settings: Settings = { ...DEFAULTS };
@@ -64,6 +67,15 @@ export default class RaftPagePlugin extends Plugin {
   private scannedSyncThreads = new Map<string, string>();
   private answeringNeeds = new Set<string>();
   private needReceipts = new Map<string, string>();
+  /** Steward messages whose edits already got a receipt in the conversation (per sign-in). */
+  private answeredEdits: string[] = [];
+  private answeringEdits = new Set<string>();
+  /** Only edits sent after this time get receipts, so upgrading does not answer old history. */
+  private receiptsSince = '';
+  /** Automatic edits written and read back from disk on this device: proposal → path, new hash, size, created. */
+  private savedEdits = new Map<string, { path: string; hash: string; bytes: number; created: boolean }>();
+  /** Automatic edits this device could not write: proposal → reason. */
+  private editErrors = new Map<string, string>();
   /** When the running sync pass started (0 = none); a pass stuck past SYNC_STALL_MS no longer blocks the next one. */
   private syncing = 0;
   private requestCount = 0;
@@ -93,6 +105,8 @@ export default class RaftPagePlugin extends Plugin {
     this.applied = data.applied || [];
     this.sentHashes = data.sentHashes || {};
     this.answeredNeeds = data.answeredNeeds || [];
+    this.answeredEdits = data.answeredEdits || [];
+    this.receiptsSince = typeof data.receiptsSince === 'string' ? data.receiptsSince : new Date().toISOString();
     // The device id lives in this device's local storage, never in synced plugin data.
     const saved = this.app.loadLocalStorage?.('raft-page-device');
     this.deviceId = typeof saved === 'string' && /^[a-z0-9-]{8,64}$/.test(saved) ? saved : crypto.randomUUID();
@@ -206,7 +220,7 @@ export default class RaftPagePlugin extends Plugin {
   }
   saveSettings(): Promise<void> {
     this.saving = this.saving.catch(() => {}).then(() => this.saveData({ settings: this.settings, snapshots: this.snapshots, applied: this.applied,
-      sentHashes: this.sentHashes, answeredNeeds: this.answeredNeeds }));
+      sentHashes: this.sentHashes, answeredNeeds: this.answeredNeeds, answeredEdits: this.answeredEdits, receiptsSince: this.receiptsSince }));
     return this.saving;
   }
   private storeSession() {
@@ -511,6 +525,7 @@ export default class RaftPagePlugin extends Plugin {
         await this.applying;
         for (const reply of replies) if (reply.senderId === steward.id) {
           await this.answerNeeds(reply, binding.syncChannelId, path);
+          await this.reportEdits(reply, binding.syncChannelId, path);
         }
       }
     }
@@ -570,10 +585,14 @@ export default class RaftPagePlugin extends Plugin {
       const replies = (await this.channelHistory(threadId)).map(m => ({ ...m, channelId: threadId }));
       for (const reply of replies) if (reply.senderId === stewardId) this.autoApply(reply);
       await this.applying;
-      for (const reply of replies) if (reply.senderId === stewardId) await this.answerNeeds(reply, dm, path);
+      for (const reply of replies) if (reply.senderId === stewardId) {
+        await this.answerNeeds(reply, dm, path);
+        await this.reportEdits(reply, dm, path);
+      }
       this.scannedSyncThreads.set(message.id, stamp);
     }
     await this.applying;
+    for (const message of page.messages) if (message.senderId === stewardId) await this.reportEdits({ ...message, channelId: message.channelId ?? dm }, dm, path);
   }
   /** The notes a binding covers, with their current text and hash. */
   private async bindingFiles(path: string, binding: { kind: 'file' | 'folder' }) {
@@ -694,6 +713,73 @@ export default class RaftPagePlugin extends Plugin {
     } finally { this.answeringNeeds.delete(key); }
   }
 
+  /** Reads a written note back; only text that is really in the vault counts as saved. */
+  private async confirmSaved(id: string, entry: UndoEntry) {
+    let text: string | null = null;
+    try { text = await this.currentText(entry.path); } catch { /* reported below */ }
+    if (text !== entry.after) { this.editErrors.set(id, 'The note read back from the vault does not match the change.'); return; }
+    this.savedEdits.set(id, { path: entry.path, hash: await hashText(text), bytes: new TextEncoder().encode(text).length, created: entry.before === null });
+  }
+  /**
+   * Tells a binding's steward what became of the edit blocks in one of its messages, in the conversation where it sent
+   * them (like read replies): each saved note with its new sha256, and each block that was not saved with the reason
+   * and the format to use, so the steward can fix and resend it. Waits until every block has an outcome. The device
+   * that wrote a change reports it; a hidden marker keeps other devices from answering again.
+   */
+  private async reportEdits(message: Message, parentChannelId: string, syncPath?: string) {
+    if (!this.session || !message.senderId || !message.channelId || !this.settings.autoApply) return;
+    if ((Date.parse(message.createdAt || '') || 0) < (Date.parse(this.receiptsSince) || 0)) return;
+    const serverId = this.session.serverId, identity = this.identity(this.session), generation = this.generation;
+    const steward = Object.entries(this.bindings).some(([path, b]) => b.serverId === serverId && b.stewardId === message.senderId && !b.paused &&
+      (syncPath === undefined ? b.channelId === parentChannelId : path === syncPath && b.syncChannelId === parentChannelId));
+    if (!steward || !this.inBindingChannel(parentChannelId, message.channelId)) return;
+    const key = JSON.stringify([identity, message.id]);
+    if (this.answeredEdits.includes(key) || this.answeringEdits.has(key)) return;
+    const { proposals, problems, position } = examineEditBlocks(message.content, message.id, message.senderName || '');
+    if (!proposals.length && !problems.length) return;
+    const allowed = new Set(this.proposals(message).map(p => p.id));
+    const saved: string[] = [], failed: string[] = [];
+    let ownFailure = false;
+    for (const p of proposals) {
+      const label = `block ${position.get(p.id)}${p.path ? ` (${p.path})` : ''}`;
+      const done = this.savedEdits.get(p.id);
+      if (done) { saved.push(`- ${done.path} · ${done.hash} · ${done.created ? 'created' : 'updated'}, ${done.bytes} bytes`); continue; }
+      // Written by another device, or by hand from a card: that device reports it.
+      if (this.applied.includes(p.id) || this.sharedApplied.has(p.id)) return;
+      const error = this.editErrors.get(p.id);
+      if (error) { failed.push(`- ${label}: ${error} Ask for the note's current text and sha256 with a raft-need block, then send the edit again.`); ownFailure = true; continue; }
+      if (!allowed.has(p.id) && !this.autoTried.has(p.id)) {
+        failed.push(`- ${label}: this path is not in a note or folder bound to this conversation. Use a vault-relative path inside the binding.`);
+        continue;
+      }
+      return; // Still being written.
+    }
+    for (const problem of problems) failed.push(`- block ${problem.index}${problem.path ? ` (${problem.path})` : ''}: ${problem.reason}`);
+    if (ownFailure && Date.now() - (Date.parse(message.createdAt || '') || 0) < EDIT_FAILURE_GRACE_MS) {
+      await this.loadSharedApplied();
+      return;
+    }
+    this.answeringEdits.add(key);
+    try {
+      const target = message.channelId === parentChannelId ? await this.client.ensureThread(parentChannelId, message.id) : message.channelId;
+      this.assertSession(generation, identity);
+      this.threadParents.set(target, parentChannelId);
+      const page = await this.client.messages(target, { limit: 100 });
+      this.assertSession(generation, identity);
+      if (!page.messages.some(m => m.content.includes(editMarker(message.id)))) {
+        // Only a failure mentions the steward: a saved edit needs no answer.
+        const lines = [failed.length ? `${EDIT_RECEIPT} · @${message.senderName} please fix and resend` : EDIT_RECEIPT];
+        if (saved.length) lines.push(`✅ Saved in the vault (path · new sha256 — use it as the next baseHash):`, ...saved);
+        if (failed.length) lines.push(`⚠️ Not saved:`, ...failed,
+          'Formats: part of a note `{"path","baseHash","ops":[…]}`; whole or empty note `{"path","baseHash","content"}`; new note `{"path","create":true,"content"}`, each in its own ```raft-edit block.');
+        await this.client.send(target, lines.join('\n') + editMarker(message.id));
+        this.assertSession(generation, identity);
+      }
+      this.answeredEdits.push(key); this.answeredEdits = this.answeredEdits.slice(-300);
+      await this.saveSettings();
+    } catch { /* The next background pass tries again. */ }
+    finally { this.answeringEdits.delete(key); }
+  }
   private activeNote(): TFile | null {
     const file = this.app.workspace.getActiveFile();
     return file?.extension === 'md' ? file : null;
@@ -878,12 +964,13 @@ export default class RaftPagePlugin extends Plugin {
           this.autoTried.delete(proposal.id); return;
         }
         if (!this.proposals(message).some(p => p.id === proposal.id)) return;
-        return this.applyProposal(proposal);
+        return this.applyProposal(proposal).then(entry => this.confirmSaved(proposal.id, entry));
       }).catch(async cause => {
         // Another device may have applied it first; its record (or the changed note) arrives with the vault sync.
         await this.loadSharedApplied();
         if (this.sharedApplied.has(proposal.id)) return;
         if (proposal.documentId && !this.snapshots[proposal.documentId]) { this.autoTried.delete(proposal.id); return; }
+        this.editErrors.set(proposal.id, cause instanceof Error ? cause.message : 'The change could not be written.');
         if (recent) new Notice(`Raft: ${proposal.senderName}'s change was not applied. ${cause instanceof Error ? cause.message : ''}`, 10000);
       });
     }
@@ -903,7 +990,10 @@ export default class RaftPagePlugin extends Plugin {
     const ordered = received.sort((a, b) => this.compareMessages(a, b));
     for (const message of ordered) this.autoApply(message);
     await this.applying;
-    for (const message of ordered) await this.answerNeeds(message, channelId);
+    for (const message of ordered) {
+      await this.answerNeeds(message, channelId);
+      await this.reportEdits(message, channelId);
+    }
   }
   /**
    * Whether a complete answer to this read request is already in the conversation where it would be posted: one
@@ -1036,8 +1126,10 @@ export default class RaftPagePlugin extends Plugin {
     this.history.push({ id: proposal.id, path: proposal.path, before, after, senderName: proposal.senderName, at: Date.now() });
     this.history = this.history.slice(-30);
     await this.saveSettings();
-    this.noticeApplied(this.history[this.history.length - 1]);
+    const entry = this.history[this.history.length - 1];
+    this.noticeApplied(entry);
     this.views().forEach(v => void v.refresh());
+    return entry;
   }
   /**
    * Replaces a note's text after checking it still has `baseHash`. Open notes change through the editor, which keeps

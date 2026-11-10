@@ -930,3 +930,36 @@ test('a sync pass that never finishes stops blocking background syncing after a 
   assert.ok(reads > 0, 'a stalled pass no longer blocks');
   assert.equal((f.plugin as any).syncing, 0);
 });
+
+test('a steward gets a receipt for every edit: the new hash once it is on disk, or the reason and format to resend', async () => {
+  const f = await readFixture(false);
+  Object.assign(f.plugin.bindings.Notes, { syncChannelId: 'dm', syncRootId: 'sync-root', syncBrief: 7 });
+  f.plugin.receiptsSince = new Date(Date.now() - 60 * 60_000).toISOString();
+  const ago = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
+  const reply = (id: string, seq: number, content: string, createdAt = ago(0)) =>
+    ({ id, seq, channelId: 'sync-thread', senderId: 'steward', senderType: 'agent', senderName: 'steward', content, createdAt });
+  const block = (data: unknown) => '```raft-edit\n' + JSON.stringify(data) + '\n```';
+  const replies = [
+    reply('old', 1, block({ path: f.file.path, baseHash: 'f'.repeat(64), content: 'before the upgrade' }), ago(120)),
+    reply('good', 2, 'Recorded.\n' + block({ path: f.file.path, baseHash: await hashText('original'), content: 'updated by steward' })),
+    reply('broken', 3, '```raft-edit\n{"path":"Notes/Original.md","baseHash":"abcabcabcabc","content":"a\nb"}\n```'),
+    reply('stale', 4, block({ path: f.file.path, baseHash: 'e3b0c44298fc', content: 'guessed hash' }), ago(2)),
+  ];
+  f.plugin.client.threadChannel = async () => 'sync-thread';
+  const posted = () => f.sends.map((args, i) => ({ id: `posted-${i}`, seq: 100 + i, channelId: args[0], senderId: 'alice', content: args[1] }));
+  f.plugin.client.messages = async (channel: string) => ({ hasMore: false, messages: channel === 'sync-thread' ? [...replies, ...posted()] : [] });
+  await f.plugin.syncTick();
+  assert.equal(f.disk.get(f.file), 'updated by steward');
+  const receipts = f.sends.map(args => args[1] as string);
+  assert.equal(receipts.length, 3, 'no receipt for edits sent before receipts existed');
+  assert.ok(f.sends.every(args => args[0] === 'sync-thread'));
+  const good = receipts.find(r => r.includes("'good'"))!;
+  assert.ok(good.startsWith('🧾 Edit receipt\n✅') && !good.includes('@steward'), 'a saved edit needs no answer');
+  assert.ok(good.includes(`Notes/Original.md · ${await hashText('updated by steward')} · updated, 18 bytes`));
+  const broken = receipts.find(r => r.includes("'broken'"))!;
+  assert.match(broken, /@steward please fix and resend[\s\S]*block 1 \(Notes\/Original\.md\): Not valid JSON[\s\S]*create":true/);
+  const stale = receipts.find(r => r.includes("'stale'"))!;
+  assert.match(stale, /@steward[\s\S]*changed after the agent read it[\s\S]*raft-need/);
+  await f.plugin.syncTick();
+  assert.equal(f.sends.length, 3, 'each message gets one receipt');
+});
