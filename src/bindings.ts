@@ -19,6 +19,8 @@ export interface Binding {
   syncRootId?: string;
   /** Version of the steward instructions carried by that thread's first message. */
   syncBrief?: number;
+  /** Steward and brief version last announced in the bound channel (`<stewardId>:<version>`). */
+  channelNotice?: string;
 }
 export type Bindings = Record<string, Binding>;
 export interface ResolvedBinding extends Binding { path: string; inherited: boolean }
@@ -41,6 +43,7 @@ export function parseBindings(text: string): Bindings {
     if (typeof b.syncRootId === 'string' && b.syncRootId) out[path].syncRootId = b.syncRootId;
     if (typeof b.syncChannelId === 'string' && b.syncChannelId) out[path].syncChannelId = b.syncChannelId;
     if (typeof b.syncBrief === 'number') out[path].syncBrief = b.syncBrief;
+    if (typeof b.channelNotice === 'string') out[path].channelNotice = b.channelNotice;
   }
   return out;
 }
@@ -78,6 +81,23 @@ export function resolveBinding(bindings: Bindings, path: string, serverId: strin
  * Binds `path` to a channel. A channel has one root on each server, so an older binding of the same channel is
  * dropped; its path is returned so the caller can say what moved.
  */
+
+/**
+ * A new note next to a channel's single bound note: that binding widened to the note's folder, so its steward can add the
+ * channel's documents there. Only when nothing else is bound in that folder and it holds no other note, so widening
+ * shows the steward nothing new.
+ */
+export function widenedForNewNote(bindings: Bindings, path: string, serverId: string, notes: string[]): (ResolvedBinding & { widenFrom: string }) | null {
+  const slash = path.lastIndexOf('/');
+  if (slash <= 0) return null;
+  const folder = path.slice(0, slash);
+  const inside = Object.keys(bindings).filter(key => key === folder || key.startsWith(folder + '/'));
+  if (inside.length !== 1) return null;
+  const from = inside[0], b = bindings[from];
+  if (b.kind !== 'file' || b.serverId !== serverId || from.lastIndexOf('/') !== slash) return null;
+  if (notes.some(note => note.startsWith(folder + '/') && note !== from)) return null;
+  return { ...b, kind: 'folder', path: folder, inherited: true, widenFrom: from };
+}
 
 /** The note or folder bound to `channelId` on this server, when one exists. */
 export function resolveChannelBinding(bindings: Bindings, channelId: string, serverId: string): ResolvedBinding | null {

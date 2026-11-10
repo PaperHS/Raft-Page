@@ -4,6 +4,7 @@ import { build } from 'esbuild';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { hashText } from '../src/documents';
+import { BRIEF_VERSION } from '../src/sync';
 
 // Bundle the real plugin, replacing only its host, transport, and UI dependencies.
 // The document protocol remains real; the hash hook controls its async boundary.
@@ -122,7 +123,8 @@ async function fixture(open = true) {
 
 async function readFixture(open = false) {
   const f = await fixture(open);
-  f.plugin.bindings = { Notes: { channelId: 'channel-a', channelName: 'a', serverId: 'server-a', kind: 'folder', stewardId: 'steward', stewardName: 'steward' } };
+  f.plugin.bindings = { Notes: { channelId: 'channel-a', channelName: 'a', serverId: 'server-a', kind: 'folder', stewardId: 'steward', stewardName: 'steward',
+    channelNotice: `steward:${BRIEF_VERSION}` } };
   const uploads: any[][] = [], sends: any[][] = [];
   f.plugin.client.uploadText = async (...args: any[]) => { uploads.push(args); return 'attachment-1'; };
   f.plugin.client.send = async (...args: any[]) => { sends.push(args); return { id: 'receipt' }; };
@@ -962,4 +964,37 @@ test('a steward gets a receipt for every edit: the new hash once it is on disk, 
   assert.match(stale, /@steward[\s\S]*changed after the agent read it[\s\S]*raft-need/);
   await f.plugin.syncTick();
   assert.equal(f.sends.length, 3, 'each message gets one receipt');
+});
+
+test('a bound channel is told once where documents go, and its steward can add a new document next to a single bound note', async () => {
+  const f = await readFixture(false);
+  f.app.vault.create = async (path: string, text: string) => { const file = new TFile(path); f.files.set(path, file); f.disk.set(file, text); return file; };
+  f.app.vault.createFolder = async () => {};
+  f.app.vault.getMarkdownFiles = () => [...f.files.values()];
+  f.plugin.bindings = { 'Notes/Original.md': { channelId: 'channel-a', channelName: 'a', serverId: 'server-a', kind: 'file', stewardId: 'steward', stewardName: 'steward',
+    syncChannelId: 'dm', syncRootId: 'sync-root', syncBrief: BRIEF_VERSION } };
+  const create = { id: 'new-doc', seq: 2, channelId: 'sync-thread', senderId: 'steward', senderType: 'agent', senderName: 'steward', createdAt: new Date().toISOString(),
+    content: '```raft-edit\n' + JSON.stringify({ path: 'Notes/Workflow.md', create: true, content: '# Workflow' }) + '\n```' };
+  f.plugin.client.threadChannel = async () => 'sync-thread';
+  const posted = () => f.sends.map((args, i) => ({ id: `posted-${i}`, seq: 100 + i, channelId: args[0], senderId: 'alice', content: args[1] }));
+  f.plugin.client.messages = async (channel: string) => ({ hasMore: false, messages: channel === 'sync-thread' ? [create, ...posted().filter(m => m.channelId === channel)]
+    : channel === 'channel-a' ? posted().filter(m => m.channelId === channel) : [] });
+  await f.plugin.syncTick();
+  assert.equal(f.disk.get(f.files.get('Notes/Workflow.md')), '# Workflow');
+  assert.deepEqual(Object.keys(f.plugin.bindings), ['Notes']);
+  assert.equal(f.plugin.bindings.Notes.kind, 'folder');
+  assert.equal(f.plugin.bindings.Notes.syncRootId, 'sync-root', 'the steward keeps its sync thread');
+  const channel = f.sends.filter(args => args[0] === 'channel-a').map(args => args[1] as string);
+  assert.ok(channel.some(text => text.startsWith('📁 This channel is now bound to the Obsidian folder `Notes`')));
+  assert.ok(f.sends.some(args => args[0] === 'sync-thread' && /Notes\/Workflow\.md · [a-f0-9]{64} · created/.test(args[1])));
+  await f.plugin.syncTick();
+  const notices = f.sends.filter(args => args[0] === 'channel-a' && args[1].startsWith('📁 Documents for this channel')).map(args => args[1] as string);
+  assert.equal(notices.length, 1, 'the channel is told once');
+  assert.match(notices[0], /@steward keeps them[\s\S]*not only into an agent's own workspace/);
+
+  // A folder that holds other notes is not widened: the steward is told the path is outside the binding.
+  const g = await readFixture(false);
+  g.app.vault.getMarkdownFiles = () => [...g.files.values(), new TFile('Notes/Private.md')];
+  g.plugin.bindings = { 'Notes/Original.md': { ...f.plugin.bindings.Notes, kind: 'file' } };
+  assert.equal(g.plugin.proposals({ ...create, channelId: 'channel-a' }).length, 0);
 });

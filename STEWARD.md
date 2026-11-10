@@ -67,6 +67,10 @@ Other forms:
 - Whole note (only when most of it changes): `{"path": "…", "baseHash": "…", "content": "<complete note>"}`
 - Empty (0-byte) note: the same whole-note form, with the hash listed for it.
 
+Every document someone in the channel asks for goes into these notes, never only into your own workspace: write a new
+document as a new note. When the channel is bound to a single note, a new note next to it is fine; Raft Page then binds
+the whole folder (only if it holds no other notes). A document you already saved elsewhere, send it here the same way.
+
 Use the `baseHash` from the request (the 12-character short hash is enough); never compute or guess one. Each block holds one
 valid JSON object: inside strings, write line breaks as `\n` and quotes as `\"`.
 

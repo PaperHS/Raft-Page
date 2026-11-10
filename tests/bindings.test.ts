@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { bind, channelName, deleteBindings, folderManifest, parseBindings, renameBindings, resolveBinding, resolveChannelBinding, mergeBindings, serializeBindings, type Bindings } from '../src/bindings';
+import { bind, channelName, deleteBindings, folderManifest, parseBindings, renameBindings, resolveBinding, resolveChannelBinding, mergeBindings, serializeBindings, widenedForNewNote, type Bindings } from '../src/bindings';
 
 const b = (channelId: string, kind: 'file' | 'folder' = 'folder', serverId = 's1') => ({ channelId, channelName: channelId, serverId, kind });
 
@@ -60,4 +60,17 @@ test('a device with an old copy writes only its own change, keeping bindings ano
   const steward = { ...b('a'), stewardId: 's', stewardName: 'scribe' };
   assert.equal(mergeBindings(before, { ...before, A: steward }, disk).A.stewardId, 's');
   assert.ok(mergeBindings(before, { ...before, A: steward }, disk).Phone);
+});
+
+test('a new note next to a single bound note widens that binding to its folder only when the folder holds nothing else', () => {
+  const note = { channelId: 'c', channelName: 'drama', serverId: 's', kind: 'file' as const, stewardId: 'bob', stewardName: 'Bob' };
+  const bindings = { 'money/drama/market.md': note };
+  const widened = widenedForNewNote(bindings, 'money/drama/workflow.md', 's', ['money/drama/market.md']);
+  assert.deepEqual(widened, { ...note, kind: 'folder', path: 'money/drama', inherited: true, widenFrom: 'money/drama/market.md' });
+  assert.equal(widenedForNewNote(bindings, 'money/drama/workflow.md', 's', ['money/drama/market.md', 'money/drama/private.md']), null, 'another note would be exposed');
+  assert.equal(widenedForNewNote(bindings, 'money/other/workflow.md', 's', []), null, 'only next to the bound note');
+  assert.equal(widenedForNewNote(bindings, 'money/drama/sub/x.md', 's', []), null);
+  assert.equal(widenedForNewNote(bindings, 'money/drama/workflow.md', 'other-server', []), null);
+  assert.equal(widenedForNewNote({ ...bindings, 'money/drama/sub/n.md': note }, 'money/drama/workflow.md', 's', []), null, 'another binding inside');
+  assert.equal(widenedForNewNote({ 'top.md': note }, 'new.md', 's', []), null, 'never the whole vault');
 });

@@ -2,10 +2,10 @@ import { Plugin, ItemView, WorkspaceLeaf, MarkdownView, TFile, TFolder, Notice, 
 import { io, type Socket } from 'socket.io-client';
 import { RaftClient, RaftClientError, type Session, type Message, type ServerInfo } from './src/client';
 import { RaftView, VIEW_TYPE } from './src/view';
-import { BRIEF_VERSION, EDIT_RECEIPT, QUIET_MS, composeSyncRequest, syncRootMessage, lastSyncedThrough, newActivity, parseNeeds } from './src/sync';
+import { BRIEF_VERSION, EDIT_RECEIPT, QUIET_MS, composeSyncRequest, stewardNotice, syncRootMessage, lastSyncedThrough, newActivity, parseNeeds } from './src/sync';
 import { safeNotePath } from './src/edits';
 import { TEMPLATE_FOLDER, fillTemplate, formatDate, mergeProperties, templateTypes } from './src/templates';
-import { BINDINGS_FILE, bind, channelName, deleteBindings, folderManifest, parseBindings, renameBindings, resolveBinding, resolveChannelBinding, mergeBindings, serializeBindings, unbind, type Bindings, type ResolvedBinding } from './src/bindings';
+import { BINDINGS_FILE, bind, channelName, deleteBindings, folderManifest, parseBindings, renameBindings, resolveBinding, resolveChannelBinding, mergeBindings, widenedForNewNote, serializeBindings, unbind, type Bindings, type ResolvedBinding } from './src/bindings';
 import { applyProposalText, composeMessage, examineEditBlocks, hashText, parseProposals, sentDocumentId, sentNote, type DocumentContext, type DocumentSnapshot, type Proposal } from './src/documents';
 
 interface Settings {
@@ -350,6 +350,25 @@ export default class RaftPagePlugin extends Plugin {
   bindingFor(path = this.attachedNote()?.path): ResolvedBinding | null {
     return path && this.session ? resolveBinding(this.bindings, path, this.session.serverId) : null;
   }
+  /** The binding an edit by path falls under; a new note may also go next to a channel's single bound note. */
+  private editBinding(path: string, create?: boolean): (ResolvedBinding & { widenFrom?: string }) | null {
+    if (!this.session) return null;
+    return resolveBinding(this.bindings, path, this.session.serverId) ?? (create
+      ? widenedForNewNote(this.bindings, path, this.session.serverId, this.app.vault.getMarkdownFiles?.().map(f => f.path) ?? []) : null);
+  }
+  /** Turns a single bound note into a binding of its folder, keeping its steward and sync thread, and tells the channel. */
+  private async widenBinding(from: string, folder: string) {
+    const binding = this.bindings[from];
+    if (!binding) return;
+    const next = { ...this.bindings, [folder]: { ...binding, kind: 'folder' as const } };
+    delete next[from];
+    if (this.sentHashes[from]) { this.sentHashes[folder] = this.sentHashes[from]; delete this.sentHashes[from]; await this.saveSettings(); }
+    await this.saveBindings(next);
+    try {
+      await this.client.send(binding.channelId, `📁 This channel is now bound to the Obsidian folder \`${folder}\` (vault “${this.app.vault.getName()}”) via Raft Page, ` +
+        `so new documents for it can sit next to \`${from}\`.`);
+    } catch { /* The binding itself is what matters. */ }
+  }
   channelBinding(channelId = this.settings.channelId): ResolvedBinding | null {
     return channelId && this.session ? resolveChannelBinding(this.bindings, channelId, this.session.serverId) : null;
   }
@@ -530,7 +549,11 @@ export default class RaftPagePlugin extends Plugin {
       }
     }
     if (binding.syncChannelId) await this.ingestOtherSyncReplies(path, binding.syncChannelId, binding.syncRootId, steward.id);
+    // A new note may have widened this binding to its folder; the next pass syncs it under its new path.
+    if (!this.bindings[path]) return;
     const page = await this.client.messages(binding.channelId, { limit: 50 });
+    await this.announceSteward(path, binding, page.messages);
+    binding = this.bindings[path] ?? binding;
     through = Math.max(through, lastSyncedThrough(page.messages, path));
     const activity = newActivity(page.messages, page.threadSummariesByParentMessageId, through, { rootId: binding.syncRootId, stewardId: steward.id });
     if (!activity.latest) { if (force) new Notice('Raft: nothing new to sync.'); return; }
@@ -565,6 +588,17 @@ export default class RaftPagePlugin extends Plugin {
     for (const f of changed) if (uploaded.includes(f.path)) sent[f.path] = f.hash;
     this.sentHashes[path] = sent;
     await this.saveSettings();
+  }
+  /**
+   * Tells the bound channel where its documents live and who keeps them, once per steward and brief, so an agent given
+   * a writing task there does not keep the document in its own workspace. Skipped when another device already said it.
+   */
+  private async announceSteward(path: string, binding: Bindings[string], recent: Message[]) {
+    const key = `${binding.stewardId}:${BRIEF_VERSION}`;
+    if (!binding.stewardId || binding.channelNotice === key) return;
+    const text = stewardNotice(path, binding.kind, binding.stewardName || '', this.app.vault.getName());
+    if (!recent.some(m => m.content === text)) await this.client.send(binding.channelId, text);
+    if (this.bindings[path]) await this.saveBindings({ ...this.bindings, [path]: { ...this.bindings[path], channelNotice: key } });
   }
   /**
    * A steward may answer in an earlier sync thread for the same note (a new thread starts whenever the steward or the
@@ -730,8 +764,9 @@ export default class RaftPagePlugin extends Plugin {
     if (!this.session || !message.senderId || !message.channelId || !this.settings.autoApply) return;
     if ((Date.parse(message.createdAt || '') || 0) < (Date.parse(this.receiptsSince) || 0)) return;
     const serverId = this.session.serverId, identity = this.identity(this.session), generation = this.generation;
-    const steward = Object.entries(this.bindings).some(([path, b]) => b.serverId === serverId && b.stewardId === message.senderId && !b.paused &&
-      (syncPath === undefined ? b.channelId === parentChannelId : path === syncPath && b.syncChannelId === parentChannelId));
+    // Any binding the steward keeps from this conversation: the one being synced may have just been widened to its folder.
+    const steward = Object.values(this.bindings).some(b => b.serverId === serverId && b.stewardId === message.senderId && !b.paused &&
+      (syncPath === undefined ? b.channelId === parentChannelId : b.syncChannelId === parentChannelId));
     if (!steward || !this.inBindingChannel(parentChannelId, message.channelId)) return;
     const key = JSON.stringify([identity, message.id]);
     if (this.answeredEdits.includes(key) || this.answeringEdits.has(key)) return;
@@ -891,7 +926,7 @@ export default class RaftPagePlugin extends Plugin {
         return [{ ...p, path: s.path }];
       }
       // Changes named by path must target a note inside a binding of the channel they were posted in.
-      const binding = p.path ? resolveBinding(this.bindings, p.path, session.serverId) : null;
+      const binding = p.path ? this.editBinding(p.path, p.create) : null;
       if (!binding || (binding.kind === 'file' && p.create) || !(this.inBindingChannel(binding.channelId, message.channelId) ||
         (binding.syncChannelId && this.inBindingChannel(binding.syncChannelId, message.channelId)))) return [];
       // With a steward, only the steward changes the notes; other agents' edits are conversation it may record.
@@ -948,7 +983,7 @@ export default class RaftPagePlugin extends Plugin {
       } else {
         // Changes by path apply on their own from the binding's steward while syncing is not paused, or from any
         // agent when the binding has no steward. Nobody is asked to apply them by hand.
-        const binding = resolveBinding(this.bindings, proposal.path, this.session!.serverId);
+        const binding = this.editBinding(proposal.path, proposal.create);
         if (!binding || binding.paused || (binding.stewardId && message.senderId !== binding.stewardId)) continue;
       }
       const generation = this.generation, identity = this.identity(this.session);
@@ -1106,7 +1141,10 @@ export default class RaftPagePlugin extends Plugin {
         if (this.snapshots[proposal.documentId!] !== snapshot) throw new Error('The original note was moved or deleted. Send its current version again.');
       }, 'This note changed after it was sent. Send the latest version before applying edits.'));
     } else if (proposal.create) {
-      if (this.app.vault.getAbstractFileByPath(proposal.path)) throw new Error(`${proposal.path} already exists.`);
+      if (this.app.vault.getAbstractFileByPath(proposal.path)) throw new Error(`${proposal.path} already exists. Edit it with its baseHash instead.`);
+      const widened = this.editBinding(proposal.path, true);
+      if (widened?.widenFrom) await this.widenBinding(widened.widenFrom, widened.path);
+      this.assertSession(generation, identity);
       const folder = proposal.path.split('/').slice(0, -1).join('/');
       if (folder && !this.app.vault.getAbstractFileByPath(folder)) await this.app.vault.createFolder(folder);
       this.assertSession(generation, identity);
