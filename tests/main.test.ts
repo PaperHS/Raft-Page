@@ -998,3 +998,15 @@ test('a bound channel is told once where documents go, and its steward can add a
   g.plugin.bindings = { 'Notes/Original.md': { ...f.plugin.bindings.Notes, kind: 'file' } };
   assert.equal(g.plugin.proposals({ ...create, channelId: 'channel-a' }).length, 0);
 });
+
+test('a steward can be chosen from outside the channel: it is added to the channel first', async () => {
+  const f = await readFixture(false);
+  const added: string[][] = [];
+  f.plugin.client.addAgent = async (channel: string, agent: string) => { added.push([channel, agent]); };
+  await f.plugin.chooseStewardAgent('Notes', { id: 'helper', name: 'helper', outside: true });
+  assert.deepEqual(added, [['channel-a', 'helper']]);
+  assert.equal(f.plugin.bindings.Notes.stewardId, 'helper');
+  await f.plugin.chooseStewardAgent('Notes', { id: 'steward', name: 'steward' });
+  assert.equal(added.length, 1, 'a member is not added again');
+  assert.equal(f.plugin.bindings.Notes.stewardId, 'steward');
+});

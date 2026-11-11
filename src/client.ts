@@ -530,6 +530,12 @@ export class RaftClient {
     return list(await this.authenticated("GET", `/api/channels/${id}/members`), "agents").map(normalizeAgent);
   }
 
+  /** Adds an agent to a channel, as the web app's Add members does. */
+  async addAgent(channelId: string, agentId: string): Promise<void> {
+    const id = encodeURIComponent(requiredInput(channelId, "channel ID"));
+    await this.authenticated("POST", `/api/channels/${id}/members`, { agentId: requiredInput(agentId, "agent ID") });
+  }
+
   /** Channel members for @mention suggestions: agents first, then humans. */
   async members(channelId: string): Promise<Member[]> {
     const id = encodeURIComponent(requiredInput(channelId, "channel ID"));

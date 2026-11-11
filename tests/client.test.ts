@@ -499,3 +499,11 @@ test("a new channel is created with the chosen agents and visibility, and agents
   assert.match(h.requests[1].url, /\/api\/channels$/);
   assert.deepEqual(h.requests[1].body, { name: "trip-plan", description: "note", visibility: "private", agentIds: ["a1"], userIds: [] });
 });
+
+test("an agent is added to an existing channel the way the web app does it", async () => {
+  const h = harness([{ status: 200, json: { ok: true } }]);
+  await h.client.addAgent("c9", "a1");
+  assert.equal(h.requests[0].method, "POST");
+  assert.match(h.requests[0].url, /\/api\/channels\/c9\/members$/);
+  assert.deepEqual(h.requests[0].body, { agentId: "a1" });
+});

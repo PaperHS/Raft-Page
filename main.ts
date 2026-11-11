@@ -478,7 +478,31 @@ export default class RaftPagePlugin extends Plugin {
     const preferred = agents.find(a => a.name === this.settings.defaultSteward);
     if (useDefault && preferred) { await this.setSteward(path, preferred); return; }
     if (useDefault && !agents.length) return;
-    new StewardPicker(this, path, agents).open();
+    // Agents outside the channel are offered too; choosing one adds it to the channel first.
+    const members = new Set(agents.map(a => a.id));
+    const others = await this.client.serverAgents().catch(() => []);
+    new StewardPicker(this, path, [...agents, ...others.filter(a => !members.has(a.id)).map(a => ({ ...a, outside: true }))]).open();
+  }
+  /** Makes an agent a steward, adding it to the binding's channel first when it is not a member yet. */
+  async chooseStewardAgent(path: string, agent: { id: string; name: string; outside?: boolean }) {
+    const binding = this.bindings[path];
+    if (!binding) throw new Error(`${path} is not bound.`);
+    if (agent.outside) await this.addAgentToChannel(binding.channelId, agent);
+    await this.setSteward(path, agent);
+  }
+  /** Adds an agent to a channel and says so. */
+  async addAgentToChannel(channelId: string, agent: { id: string; name: string }) {
+    await this.client.addAgent(channelId, agent.id);
+    new Notice(`Raft: @${agent.name} joined the channel.`);
+    this.views().forEach(v => void v.refreshCatalog(true));
+  }
+  /** Lists the server's agents that are not in the channel, to add one. */
+  async chooseAgentToAdd(channelId: string) {
+    const [members, all] = await Promise.all([this.client.agents(channelId), this.client.serverAgents()]);
+    const inside = new Set(members.map(a => a.id));
+    const others = all.filter(a => !inside.has(a.id));
+    if (!others.length) { new Notice('Raft: every agent on this server is already in the channel.'); return; }
+    new AgentAdder(this, channelId, others).open();
   }
 
   /** Every 30 seconds: for each binding with a steward, answer its file requests and ask it to sync once the channel is quiet. */
@@ -1335,7 +1359,19 @@ class NewChannelModal extends Modal {
   }
   onClose() { this.contentEl.empty(); }
 }
-type StewardChoice = { id: string; name: string; displayName?: string } | null;
+type StewardChoice = { id: string; name: string; displayName?: string; outside?: boolean } | null;
+class AgentAdder extends FuzzySuggestModal<{ id: string; name: string; displayName?: string }> {
+  constructor(private plugin: RaftPagePlugin, private channelId: string, private agents: { id: string; name: string; displayName?: string }[]) {
+    super(plugin.app);
+    this.setPlaceholder('Choose an agent to add to this channel…');
+  }
+  getItems() { return this.agents; }
+  getItemText(agent: { name: string; displayName?: string }) { return `@${agent.name}${agent.displayName && agent.displayName !== agent.name ? ` (${agent.displayName})` : ''}`; }
+  onChooseItem(agent: { id: string; name: string }) {
+    void this.plugin.addAgentToChannel(this.channelId, agent)
+      .catch(cause => new Notice(`Raft: ${cause instanceof Error ? cause.message : 'could not add the agent.'}`));
+  }
+}
 class StewardPicker extends FuzzySuggestModal<StewardChoice> {
   constructor(private plugin: RaftPagePlugin, private path: string, private agents: { id: string; name: string; displayName?: string }[],
     private onDone?: () => void) {
@@ -1343,9 +1379,12 @@ class StewardPicker extends FuzzySuggestModal<StewardChoice> {
     this.setPlaceholder(`Choose the agent that keeps ${path} up to date…`);
   }
   getItems(): StewardChoice[] { return [null, ...this.agents]; }
-  getItemText(agent: StewardChoice) { return agent ? `@${agent.name}${agent.displayName && agent.displayName !== agent.name ? ` (${agent.displayName})` : ''}` : 'No steward — no automatic updates'; }
+  getItemText(agent: StewardChoice) {
+    if (!agent) return 'No steward — no automatic updates';
+    return `@${agent.name}${agent.displayName && agent.displayName !== agent.name ? ` (${agent.displayName})` : ''}${agent.outside ? ' · add to channel' : ''}`;
+  }
   onChooseItem(agent: StewardChoice) {
-    void this.plugin.setSteward(this.path, agent)
+    void (agent ? this.plugin.chooseStewardAgent(this.path, agent) : this.plugin.setSteward(this.path, null))
       .catch(cause => new Notice(`Raft: ${cause instanceof Error ? cause.message : 'could not set the steward.'}`))
       .finally(() => this.onDone?.());
   }

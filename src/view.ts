@@ -306,6 +306,8 @@ export class RaftView extends ItemView {
         menu.addItem(item => item.setTitle(binding.paused ? 'Resume automatic updates' : 'Pause automatic updates').setIcon(binding.paused ? 'play' : 'pause')
           .onClick(() => { void this.plugin.setPaused(binding.path, !binding.paused); }));
       }
+      menu.addItem(item => item.setTitle('Add an agent to this channel…').setIcon('user-plus')
+        .onClick(() => { void this.plugin.chooseAgentToAdd(binding.channelId).catch(cause => this.showError(cause, 'Could not load agents.')); }));
       menu.addItem(item => item.setTitle(`Unbind ${binding.path}`).setIcon('unlink').onClick(() => { void this.plugin.unbindPath(binding.path); }));
       menu.addItem(item => item.setTitle('Reveal in file explorer').setIcon('folder-search').onClick(() => this.plugin.revealInTree(binding.path)));
     } else if (channel && target) {
@@ -321,6 +323,8 @@ export class RaftView extends ItemView {
       for (const folder of folders.slice(1)) bindTo(folder, `Bind parent folder ${folder} → #${channel.name}`);
       menu.addItem(item => item.setTitle('Bind to another channel…').setIcon('list').onClick(() => this.plugin.chooseChannel(target)));
     }
+    if (!binding && channel) menu.addItem(item => item.setTitle('Add an agent to this channel…').setIcon('user-plus')
+      .onClick(() => { void this.plugin.chooseAgentToAdd(channel.id).catch(cause => this.showError(cause, 'Could not load agents.')); }));
     menu.showAtMouseEvent(event);
   }
 
